@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 
-from io.observation import Observation
+from data_io.observation import Observation
 
 
 class BaseFilter(ABC):

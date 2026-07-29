@@ -28,7 +28,7 @@ class AreaFilter(BaseFilter):
 
         ratio = area / total
 
-        observation.metrics["area_ratio"] = ratio
+        observation.metrics.area_ratio = ratio
 
         score = min(
             ratio / self.minimum_ratio,

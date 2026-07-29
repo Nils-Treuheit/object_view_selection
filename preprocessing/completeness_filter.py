@@ -104,10 +104,10 @@ class CompletenessFilter(BaseFilter):
             + self.weights[2] * convexity
         )
 
-        observation.metrics["solidity"] = solidity
-        observation.metrics["extent"] = extent
-        observation.metrics["convexity"] = convexity
-        observation.metrics["completeness"] = score
+        observation.metrics.solidity = solidity
+        observation.metrics.extent = extent
+        observation.metrics.convexity = convexity
+        observation.metrics.completeness = score
 
         passed = score >= self.minimum_score
 

@@ -4,6 +4,8 @@ from typing import Optional
 
 import numpy as np
 
+from .metrics import ObservationMetrics
+
 
 @dataclass
 class Observation:
@@ -27,7 +29,7 @@ class Observation:
     rejection_reason: Optional[str] = None
 
     metrics: ObservationMetrics = field(
-    	default_factory=ObservationMetrics
+        default_factory=ObservationMetrics
     )
 
 

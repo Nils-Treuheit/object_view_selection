@@ -37,7 +37,7 @@ class OcclusionFilter(BaseFilter):
 
         ratio = overlap / total
 
-        observation.metrics["hand_overlap"] = ratio
+        observation.metrics.hand_overlap = ratio
 
         score = 1.0 - min(
             ratio / self.maximum_overlap,

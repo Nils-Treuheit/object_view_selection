@@ -1,4 +1,4 @@
-from preprocessing.blur import BlurFilter
+from preprocessing.blur_filter import BlurFilter
 
 from .base import QualityMetric
 

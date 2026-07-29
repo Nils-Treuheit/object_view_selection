@@ -48,8 +48,8 @@ class BlurFilter(BaseFilter):
 
         ten = self.tenengrad(observation.image)
 
-        observation.metrics["laplacian"] = lap
-        observation.metrics["tenengrad"] = ten
+        observation.metrics.laplacian = lap
+        observation.metrics.tenengrad = ten
 
         lap_score = min(lap / self.laplacian_threshold, 1.0)
 

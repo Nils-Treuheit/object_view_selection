@@ -6,8 +6,4 @@ class CompletenessQuality(QualityMetric):
     name = "completeness"
 
     def compute(self, observation):
-
-        return observation.metrics.get(
-            "completeness",
-            0.0,
-        )
+        return getattr(observation.metrics, "completeness", 0.0)

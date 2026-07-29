@@ -38,7 +38,7 @@ class BorderFilter(BaseFilter):
 
         ratio = border_pixels / total
 
-        observation.metrics["border_ratio"] = ratio
+        observation.metrics.border_ratio = ratio
 
         score = 1.0 - min(
             ratio / self.maximum_ratio,
