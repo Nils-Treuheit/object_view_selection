@@ -21,5 +21,6 @@ def fourier_descriptors(mask: np.ndarray, num_descriptors: int = 32) -> np.ndarr
     if len(fourier) < num_descriptors:
         fourier = np.pad(fourier, (0, num_descriptors - len(fourier)))
 
-    fourier = fourier / (fourier[0] + 1e-10)
+    total = np.sum(fourier)
+    fourier = fourier / (total + 1e-10)
     return fourier
