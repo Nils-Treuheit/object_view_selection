@@ -109,8 +109,13 @@ def build_embedding_model(cfg: PipelineConfig):
 
     if embedding_type == "dinov3":
         from embeddings.dinov3 import DINOv3Embedding
-        return DINOv3Embedding(model_name=variant)
-    elif embedding_type == "dinov2":
+        try:
+            return DINOv3Embedding(model_name=variant)
+        except Exception as e:
+            print(f"Warning: DINOv3 failed to load ({e}). Falling back to DINOv2.")
+            embedding_type = "dinov2"
+            variant = "dinov2_vitb14_reg"
+    if embedding_type == "dinov2":
         from embeddings.dinov2 import DINOv2Embedding
         return DINOv2Embedding(model_name=variant)
     elif embedding_type == "siglip2":
