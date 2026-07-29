@@ -19,7 +19,6 @@ class DINOv3Embedding(EmbeddingModel):
 
         cache_dir = cache_dir or _HF_HOME
         os.environ.setdefault("HF_HOME", cache_dir)
-        os.environ.setdefault("HF_HUB_OFFLINE", "1")
 
         from transformers import AutoModel
         self.model = AutoModel.from_pretrained(model_name, trust_remote_code=True)
@@ -34,9 +33,9 @@ class DINOv3Embedding(EmbeddingModel):
     def encode(self, image: np.ndarray, mask: np.ndarray) -> np.ndarray:
         from embeddings.crop import padded_square_crop
         crop = padded_square_crop(image, mask, size=224)
-        crop = crop.astype(np.float32) / 255.0
-        mean = np.array([0.485, 0.456, 0.406])
-        std = np.array([0.229, 0.224, 0.225])
+        crop = (crop / 255.0).astype(np.float32)
+        mean = np.array([0.485, 0.456, 0.406], dtype=np.float32)
+        std = np.array([0.229, 0.224, 0.225], dtype=np.float32)
         crop = (crop - mean) / std
         tensor = torch.from_numpy(crop).permute(2, 0, 1).unsqueeze(0).to(self.device)
 
