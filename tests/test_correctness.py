@@ -68,6 +68,7 @@ def main():
         test_edge_case,
         test_crops,
         test_metrics,
+        test_plotting,
     )
 
     modules = [
@@ -80,6 +81,7 @@ def main():
         ("Edge cases", test_edge_case),
         ("Crop functions", test_crops),
         ("Metrics dataclass", test_metrics),
+        ("Plotting", test_plotting),
     ]
 
     for name, module in modules:

@@ -83,6 +83,29 @@ python run.py --data_root /path/to/bottle \
   --selector quality_diversity --selector_alpha 0.3 --selector_beta 0.7
 ```
 
+### Generating Plots
+
+Use the `--plot` flag to generate diagnostic plots after selection:
+
+```bash
+python run.py --data_root /path/to/bottle --num_views 10 --output_dir ./outputs --plot
+
+# With debug mode (all DR methods, not just PCA + MDS):
+python run.py --data_root /path/to/bottle --num_views 10 --output_dir ./outputs --plot --debug
+```
+
+Plots are saved under `outputs/plots/`. See [`docs/plotting.md`](docs/plotting.md) for a complete reference.
+
+### Standalone Plotting
+
+Re-generate plots from a previous pipeline run without re-running the pipeline:
+
+```bash
+python -m plotting_process.wrapper --input_dir ./outputs [--output_dir ./plots] [--debug]
+```
+
+If `--output_dir` is omitted, the `plots/` folder is created inside `--input_dir`.
+
 ### Arguments
 
 | Argument | Default | Choices |
@@ -113,7 +136,28 @@ outputs/
 ├── embeddings.npy         # Embedding matrix (accepted pool)
 ├── selected_indices.npy   # Selected indices into embedding matrix
 ├── rejected.json          # Per-observation rejection reasons
-└── visualization.png      # Overview grid of selected views
+├── rejected_metrics.csv   # Pre-filter raw metrics for rejected obs.
+├── visualization.png      # Overview grid of selected views
+│
+└── plots/                 # Diagnostic plots (if --plot)
+    ├── pre-filter/
+    │   ├── violin_rejected_vs_accepted.png
+    │   ├── violin_rejected_vs_accepted_scaled.png
+    │   └── rejection_reasons.png
+    │
+    └── selection/
+        ├── violin_*.png                   # Quality-score violins
+        │
+        ├── 2D_DR_plots/
+        │   ├── selection_embedding.png    # PCA (jet)
+        │   ├── selection_embedding_scaled.png  # PCA (viridis)
+        │   ├── embedding_mds.png
+        │   └── embedding_{tsne,umap,...}.png   # (debug only)
+        │
+        └── 3D_DR_plots/
+            ├── selection_embedding_3d.html     # PCA (plotly)
+            ├── embedding_mds_3d.html
+            └── embedding_{tsne,umap,...}_3d.html  # (debug only)
 ```
 
 ## Configuration
@@ -122,7 +166,7 @@ All pipeline parameters are controlled via `config.py`. See [`docs/thresholds.md
 
 ## Testing
 
-The project has **86 correctness tests** and **51 smoke tests**.
+The project has **101 correctness tests** (86 original + 15 plotting) and **51 smoke tests**.
 
 ### Correctness Tests
 
@@ -133,7 +177,7 @@ outputs — no external labeled dataset needed:
 # Run all correctness tests
 python tests/run_correctness.py
 
-# Expected output: 86 passed, 0 failed out of 86
+# Expected output: 101 passed, 0 failed out of 101
 ```
 
 ### Smoke Tests
@@ -205,17 +249,28 @@ object_view_selection/
 │   ├── visualization.py      # Overview grid saving
 │   └── ...
 │
+├── plotting_process/              # Diagnostic plotting submodule
+│   ├── wrapper.py                 # plot_all() + standalone CLI
+│   ├── misc_plot.py               # Rejection-reasons bar chart
+│   ├── embedding_plots/           # 2D/3D DR scatter plots
+│   │   ├── base.py                # Shared scatter-drawing helpers
+│   │   └── {pca,mds,tsne,...}.py  # One file per DR method
+│   └── quality_score_plots/
+│       └── violins.py             # Quality-score & pre-filter violins
+│
 ├── tests/
 │   ├── run_correctness.py    # Correctness test runner
 │   ├── run_smoke.py          # Smoke test runner
 │   ├── test_utils.py         # Shared helpers (make_circle_mask, make_flower, check)
 │   ├── smoke_test_utils.py   # Smoke test helpers
-│   ├── correctness_test_units/  # Test modules (86 tests)
+│   ├── correctness_test_units/  # Test modules (101 tests)
 │   └── smoke_test_units/        # Smoke test modules (51 tests)
 │
 ├── docs/
-│   ├── pipeline.md           # Detailed pipeline documentation
-│   └── thresholds.md         # Threshold auto-tuning reference
+│   ├── pipeline.md              # Detailed pipeline documentation
+│   ├── plotting.md              # Plotting module reference
+│   ├── selection_algorithms.md  # Selection algorithm deep-dive
+│   └── thresholds.md            # Threshold auto-tuning reference
 │
 └── README.md
 ```
@@ -224,3 +279,5 @@ object_view_selection/
 
 - [`docs/pipeline.md`](docs/pipeline.md) — Detailed module descriptions, algorithm explanations, configuration reference
 - [`docs/thresholds.md`](docs/thresholds.md) — Auto-tuning strategy, safety limits, percentile rules, override instructions
+- [`docs/plotting.md`](docs/plotting.md) — Diagnostic plot reference, output structure, standalone usage
+- [`docs/selection_algorithms.md`](docs/selection_algorithms.md) — Selection algorithm deep-dive with pseudocode and comparison

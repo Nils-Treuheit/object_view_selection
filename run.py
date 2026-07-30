@@ -345,6 +345,20 @@ def run_pipeline(cfg: PipelineConfig):
     with open(output_dir / "rejected.json", "w") as f:
         json.dump(rejected_data, f, indent=2)
 
+    rejected_metrics_csv = []
+    for obs in rejected:
+        m = obs.metrics
+        rejected_metrics_csv.append({
+            "id": obs.id,
+            "laplacian": m.laplacian,
+            "tenengrad": m.tenengrad,
+            "area_ratio": m.area_ratio,
+            "border_ratio": m.border_ratio,
+            "hand_overlap": m.hand_overlap,
+            "completeness": m.completeness,
+        })
+    pd.DataFrame(rejected_metrics_csv).to_csv(output_dir / "rejected_metrics.csv", index=False)
+
     effective_embedding = cfg.embedding
     if effective_embedding == "auto":
         effective_embedding = infer_embedding_type(cfg.embedding_model)
@@ -454,7 +468,7 @@ def run_pipeline(cfg: PipelineConfig):
     if cfg.save_plots:
         try:
             from utils.plotting import plot_all
-            plot_all(accepted, rejected, selected, embeddings, selected_idx, quality_scores, output_dir, single_set_plots=cfg.debug)
+            plot_all(accepted, rejected, selected, embeddings, selected_idx, quality_scores, output_dir, single_set_plots=cfg.debug, debug=cfg.debug)
         except Exception as e:
             print(f"Plotting failed: {e}")
 
