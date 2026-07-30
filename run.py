@@ -3,6 +3,7 @@ from pathlib import Path
 
 import cv2
 import numpy as np
+from sklearn.metrics import pairwise_distances
 from tqdm import tqdm
 
 from config import PipelineConfig
@@ -59,11 +60,14 @@ def build_filters(cfg: PipelineConfig, tuned=None):
     return FilterPipeline(filters)
 
 
-def build_quality_scorer(cfg: PipelineConfig):
+def build_quality_scorer(cfg: PipelineConfig, tuned=None):
+    if tuned is None:
+        tuned = {}
     metrics = []
     weights = {}
     if cfg.filters.blur.enabled:
-        metrics.append(BlurQuality())
+        lap_thresh = tuned.get("laplacian_threshold", cfg.filters.blur.threshold)
+        metrics.append(BlurQuality(max_lap=lap_thresh * 2))
         weights["blur"] = cfg.quality_weights.blur
     if cfg.filters.area.enabled:
         metrics.append(AreaQuality())
@@ -206,7 +210,7 @@ def run_pipeline(cfg: PipelineConfig):
         print(f"  completeness_minimum_score={tuned['completeness_minimum_score']}")
 
     filter_pipeline = build_filters(cfg, tuned)
-    quality_scorer = build_quality_scorer(cfg)
+    quality_scorer = build_quality_scorer(cfg, tuned)
     embedding_model = build_embedding_model(cfg)
     selector = build_selector(cfg)
 
@@ -228,6 +232,14 @@ def run_pipeline(cfg: PipelineConfig):
     for obs in tqdm(accepted, desc="Scoring quality"):
         quality_scorer.score(obs)
 
+    for obs in accepted:
+        obs.metrics.confidence = min(
+            obs.metrics.blur,
+            obs.metrics.area,
+            obs.metrics.occlusion,
+            obs.metrics.completeness,
+        )
+
     if cfg.use_shape_descriptors or embedding_model is None:
         for obs in tqdm(accepted, desc="Extracting descriptors"):
             feat = extract_shape_descriptor(obs, cfg.shape_descriptor)
@@ -248,6 +260,8 @@ def run_pipeline(cfg: PipelineConfig):
     selected = [accepted[i] for i in selected_idx]
     print(f"Selected {len(selected)} views")
 
+    selected_set = {s.id for s in selected}
+
     quality_csv = []
     for i, obs in enumerate(accepted):
         row = {
@@ -266,7 +280,7 @@ def run_pipeline(cfg: PipelineConfig):
             "area": obs.metrics.area,
             "occlusion": obs.metrics.occlusion,
             "confidence": obs.metrics.confidence,
-            "selected": obs.id in {s.id for s in selected},
+            "selected": obs.id in selected_set,
         }
         quality_csv.append(row)
 
@@ -304,6 +318,77 @@ def run_pipeline(cfg: PipelineConfig):
     if effective_embedding == "auto":
         effective_embedding = infer_embedding_type(cfg.embedding_model)
 
+    # --- selection metrics ---
+    from sklearn.metrics import pairwise_distances
+    dist = pairwise_distances(embeddings, metric="cosine")
+    sel_dist = dist[np.ix_(selected_idx, selected_idx)]
+    n_sel = len(selected_idx)
+    triu_sel = sel_dist[np.triu_indices(n_sel, k=1)]
+    sel_qual = quality_scores[selected_idx]
+
+    non_sel_mask = np.ones(len(embeddings), dtype=bool)
+    non_sel_mask[selected_idx] = False
+    non_sel_idx = np.where(non_sel_mask)[0]
+    coverage_dists = dist[non_sel_idx][:, selected_idx].min(axis=1) if len(non_sel_idx) > 0 else np.array([])
+
+    selection_log = []
+    if cfg.selector == "quality_diversity":
+        from selection.greedy_quality_diversity import GreedyQualityDiversity
+        s = GreedyQualityDiversity(alpha=cfg.selector_alpha, beta=cfg.selector_beta)
+        steps = []
+        pool = set(range(len(embeddings)))
+        first = int(quality_scores.argmax())
+        steps.append(first)
+        selection_log.append({
+            "step": 0, "id": int(accepted[first].id),
+            "quality": float(quality_scores[first]),
+            "min_cosine_dist_to_set": None, "score": None,
+        })
+        pool.remove(first)
+        while len(steps) < len(selected_idx):
+            best_score = -np.inf
+            best_i = -1
+            for i in pool:
+                diversity = dist[i, steps].min()
+                score = cfg.selector_alpha * quality_scores[i] + cfg.selector_beta * diversity
+                if score > best_score:
+                    best_score = score
+                    best_i = i
+            steps.append(best_i)
+            pool.remove(best_i)
+            selection_log.append({
+                "step": len(steps)-1, "id": int(accepted[best_i].id),
+                "quality": float(quality_scores[best_i]),
+                "min_cosine_dist_to_set": float(dist[best_i, steps[:-1]].min()),
+                "score": float(best_score),
+            })
+
+    selection_metrics = {
+        "selector": cfg.selector,
+        "num_views": cfg.num_views,
+        "selected_count": n_sel,
+        "intra_set": {
+            "mean_pairwise_cosine_distance": float(triu_sel.mean()) if len(triu_sel) > 0 else 0.0,
+            "min_pairwise_cosine_distance": float(triu_sel.min()) if len(triu_sel) > 0 else 0.0,
+            "max_pairwise_cosine_distance": float(triu_sel.max()) if len(triu_sel) > 0 else 0.0,
+            "mean_similarity": float((1 - triu_sel).mean()) if len(triu_sel) > 0 else 0.0,
+        },
+        "quality": {
+            "selected_mean": float(sel_qual.mean()),
+            "selected_min": float(sel_qual.min()),
+            "selected_max": float(sel_qual.max()),
+            "pool_mean": float(quality_scores.mean()),
+        },
+        "coverage": {
+            "mean_min_cosine_dist_to_selected": float(coverage_dists.mean()) if len(coverage_dists) > 0 else 0.0,
+            "median_min_cosine_dist_to_selected": float(np.median(coverage_dists)) if len(coverage_dists) > 0 else 0.0,
+            "pool_covered_within_05": int((coverage_dists <= 0.5).sum()) if len(coverage_dists) > 0 else 0,
+            "pool_covered_within_03": int((coverage_dists <= 0.3).sum()) if len(coverage_dists) > 0 else 0,
+            "total_unselected": int(len(non_sel_idx)),
+        },
+        "selection_log": selection_log,
+    }
+
     report = {
         "total": len(dataset),
         "accepted": len(accepted),
@@ -316,6 +401,7 @@ def run_pipeline(cfg: PipelineConfig):
         "accepted_ids": [obs.id for obs in accepted],
         "selected_ids": [obs.id for obs in selected],
         "rejected_ids": [obs.id for obs in rejected],
+        "selection_metrics": selection_metrics,
     }
     with open(output_dir / "report.json", "w") as f:
         json.dump(report, f, indent=2)

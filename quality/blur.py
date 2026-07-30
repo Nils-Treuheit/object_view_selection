@@ -7,9 +7,10 @@ class BlurQuality(QualityMetric):
 
     name = "blur"
 
-    def __init__(self):
+    def __init__(self, max_lap=300.0):
 
         self.blur = BlurFilter(enabled=False)
+        self.max_lap = max_lap
 
     def compute(self, observation):
 
@@ -18,7 +19,7 @@ class BlurQuality(QualityMetric):
         )
 
         score = min(
-            lap / 300.0,
+            lap / self.max_lap,
             1.0,
         )
 

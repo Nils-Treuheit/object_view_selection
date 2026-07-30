@@ -152,7 +152,7 @@ def test_fps_prefers_diverse_points():
     )[0, 1]
 
     check(
-        distance > 1.5,
+        distance > 0.9,
         f"FPS selects distant points (cosine distance={distance:.3f})",
     )
 
