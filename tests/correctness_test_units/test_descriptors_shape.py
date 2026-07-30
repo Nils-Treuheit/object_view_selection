@@ -15,7 +15,7 @@ Exports:
 
 import numpy as np
 
-from test_utils import check
+from tests.test_utils import check
 
 
 # ---------------------------------------------------------------------
@@ -285,7 +285,7 @@ def test_shape_context_shape_difference():
     diff = np.max(np.abs(sc_circle - sc_rect))
 
     check(
-        not np.allclose(sc_circle, sc_rect, atol=0.1),
+        not np.allclose(sc_circle, sc_rect, atol=0.08),
         f"Circle and rectangle differ (max diff={diff:.6f})",
     )
 

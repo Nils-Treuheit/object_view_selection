@@ -21,24 +21,26 @@ from quality.occlusion import OcclusionQuality
 from quality.quality_scorer import QualityScorer
 
 
-def build_filters(cfg: PipelineConfig):
-    filters = []
+def build_filters(cfg: PipelineConfig, tuned=None):
+    if tuned is None:
+        tuned = {}
+
     available = {
         "blur": BlurFilter(
-            laplacian_threshold=cfg.filters.blur.threshold,
-            tenengrad_threshold=cfg.filters.blur.tenengrad_threshold,
+            laplacian_threshold=tuned.get("laplacian_threshold", cfg.filters.blur.threshold),
+            tenengrad_threshold=tuned.get("tenengrad_threshold", cfg.filters.blur.tenengrad_threshold),
             enabled=cfg.filters.blur.enabled,
         ),
         "area": AreaFilter(
-            minimum_ratio=cfg.filters.area.minimum_ratio,
+            minimum_ratio=tuned.get("area_minimum_ratio", cfg.filters.area.minimum_ratio),
             enabled=cfg.filters.area.enabled,
         ),
         "border": BorderFilter(
-            maximum_ratio=cfg.filters.border.maximum_ratio,
+            maximum_ratio=tuned.get("border_maximum_ratio", cfg.filters.border.maximum_ratio),
             enabled=cfg.filters.border.enabled,
         ),
         "occlusion": OcclusionFilter(
-            maximum_overlap=cfg.filters.occlusion.maximum_overlap,
+            maximum_overlap=tuned.get("occlusion_maximum_overlap", cfg.filters.occlusion.maximum_overlap),
             enabled=cfg.filters.occlusion.enabled,
         ),
         "confidence": ConfidenceFilter(
@@ -46,10 +48,11 @@ def build_filters(cfg: PipelineConfig):
             enabled=cfg.filters.confidence.enabled,
         ),
         "completeness": CompletenessFilter(
-            minimum_score=cfg.filters.completeness.minimum_score,
+            minimum_score=tuned.get("completeness_minimum_score", cfg.filters.completeness.minimum_score),
             enabled=cfg.filters.completeness.enabled,
         ),
     }
+    filters = []
     for name in cfg.filters.filter_order:
         if name in available:
             filters.append(available[name])
@@ -190,7 +193,19 @@ def run_pipeline(cfg: PipelineConfig):
     dataset.load_images()
     print(f"Loaded {len(dataset)} observations")
 
-    filter_pipeline = build_filters(cfg)
+    tuned = {}
+    if cfg.auto_thresholds:
+        from utils.threshold_tuner import tune_thresholds
+        print("Computing data-driven thresholds...")
+        tuned = tune_thresholds(dataset.observations)
+        print(f"  area_minimum_ratio={tuned['area_minimum_ratio']}")
+        print(f"  border_maximum_ratio={tuned['border_maximum_ratio']}")
+        print(f"  laplacian_threshold={tuned['laplacian_threshold']}")
+        print(f"  tenengrad_threshold={tuned['tenengrad_threshold']}")
+        print(f"  occlusion_maximum_overlap={tuned['occlusion_maximum_overlap']}")
+        print(f"  completeness_minimum_score={tuned['completeness_minimum_score']}")
+
+    filter_pipeline = build_filters(cfg, tuned)
     quality_scorer = build_quality_scorer(cfg)
     embedding_model = build_embedding_model(cfg)
     selector = build_selector(cfg)

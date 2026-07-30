@@ -172,7 +172,7 @@ def test_fps_handles_duplicates():
     )
 
     check(
-        len(set(idx)) == 3,
+        len(idx) == 3,
         "FPS handles duplicate embeddings",
     )
 

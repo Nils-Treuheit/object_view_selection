@@ -34,8 +34,8 @@ class ConfidenceConfig:
 
 @dataclass
 class CompletenessConfig:
-    enabled: bool = False
-    minimum_score: float = 0.5
+    enabled: bool = True
+    minimum_score: float = 0.65
 
 
 @dataclass
@@ -53,11 +53,11 @@ class FilterConfig:
 
 @dataclass
 class QualityWeights:
-    blur: float = 0.25
-    area: float = 0.20
+    blur: float = 0.20
+    area: float = 0.15
     occlusion: float = 0.20
     confidence: float = 0.10
-    completeness: float = 0.25
+    completeness: float = 0.35
 
 
 @dataclass
@@ -73,6 +73,7 @@ class PipelineConfig:
 
     use_shape_descriptors: bool = False
     shape_descriptor: str = "hu"
+    auto_thresholds: bool = True
 
     selector: str = "quality_diversity"
     selector_alpha: float = 0.4

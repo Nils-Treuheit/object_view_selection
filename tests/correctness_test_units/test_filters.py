@@ -386,7 +386,7 @@ def test_completeness():
     flower = make_flower_mask()
 
     cf = CompletenessFilter(
-        minimum_score=0.6,
+        minimum_score=0.65,
     )
 
     obs_circle = observation(img, circle)
