@@ -6,6 +6,7 @@ matplotlib.use("Agg")
 import numpy as np
 import pandas as pd
 from matplotlib import pyplot as plt
+from matplotlib.gridspec import GridSpec
 from sklearn.decomposition import PCA
 from sklearn.metrics import pairwise_distances
 
@@ -16,12 +17,56 @@ def _build_df(observations, score_keys, label):
         row = {"id": obs.id}
         m = obs.metrics
         for k in score_keys:
-            row[k] = getattr(m, k, None)
+            if k == "border_free":
+                row[k] = 1.0 - getattr(m, "border_ratio", 0.0)
+            elif k == "hand_overlap_free":
+                row[k] = 1.0 - getattr(m, "hand_overlap", 0.0)
+            else:
+                row[k] = getattr(m, k, None)
         row["quality"] = obs.quality
+        row["score"] = obs.quality
         rows.append(row)
     df = pd.DataFrame(rows)
     df["group"] = label
     return df
+
+
+def _create_violin_figure(n, sep_index):
+    has_spacer = sep_index is not None and sep_index < n - 1
+    if has_spacer:
+        n_cols = n + 1
+        ratios = [1.0] * n_cols
+        ratios[sep_index + 1] = 0.08
+    else:
+        n_cols = n
+        ratios = None
+
+    extra_w = 0.08 if has_spacer else 0
+    fig = plt.figure(figsize=(3 * n + 1 + extra_w, 4.5))
+
+    if has_spacer:
+        gs = GridSpec(1, n_cols, width_ratios=ratios, figure=fig)
+        axes_raw = [fig.add_subplot(gs[0, i]) for i in range(n_cols)]
+        sp = axes_raw[sep_index + 1]
+        for spine in sp.spines.values():
+            spine.set_visible(False)
+        sp.tick_params(left=False, labelleft=False, bottom=False, labelbottom=False)
+        sp.set_xlim(0, 1)
+        sp.set_ylim(0, 1)
+        sp.axvline(0.5, color="gray", linewidth=0.8, linestyle="-")
+        axes = []
+        for i in range(n):
+            if i <= sep_index:
+                axes.append(axes_raw[i])
+            else:
+                axes.append(axes_raw[i + 1])
+        fig._ax_spacer = axes_raw[sep_index + 1]
+    else:
+        axes_raw = [fig.add_subplot(1, n_cols, i + 1) for i in range(n_cols)]
+        axes = axes_raw
+        fig._ax_spacer = None
+
+    return fig, axes
 
 
 def _plot_violin_set(
@@ -31,9 +76,10 @@ def _plot_violin_set(
     path,
     group_col=None,
     palette=None,
+    sep_index=None,
 ):
     n = len(score_keys)
-    fig, axes = plt.subplots(1, n, figsize=(3 * n + 1, 4.5), sharey=False)
+    fig, axes = _create_violin_figure(n, sep_index)
     if n == 1:
         axes = [axes]
 
@@ -75,38 +121,89 @@ def _plot_violin_set(
     print(f"  Saved {path}")
 
 
-def plot_quality_violins(accepted, rejected, selected, output_dir):
-    score_keys = ["blur", "area", "occlusion", "completeness", "confidence", "quality"]
+def _plot_violin_set_scaled(
+    df,
+    score_keys,
+    title,
+    path,
+    palette=None,
+    sep_index=None,
+):
+    n = len(score_keys)
+    fig, axes = _create_violin_figure(n, sep_index)
+    if n == 1:
+        axes = [axes]
+
+    for ax, key in zip(axes, score_keys):
+        vals = df[key].dropna().values
+        if len(vals) == 0:
+            continue
+        ax.violinplot(vals, positions=[1], showmeans=True, showmedians=False)
+
+        vmin, vmax = vals.min(), vals.max()
+        margin = max((vmax - vmin) * 0.15, 0.01)
+        ax.set_ylim(vmin - margin, vmax + margin)
+
+        ax.set_title(key, fontsize=10)
+        ax.set_ylabel("Score" if key == score_keys[0] else "")
+        ax.set_xticks([1])
+        ax.set_xticklabels([key], fontsize=8)
+
+    fig.suptitle(title, fontsize=12)
+    fig.tight_layout(rect=(0, 0, 1, 0.95))
+    fig.savefig(path, dpi=150)
+    plt.close(fig)
+    print(f"  Saved {path}")
+
+
+def plot_quality_violins(accepted, rejected, selected, output_dir, single_set_plots=True):
+    score_keys = ["blur", "area", "occlusion", "completeness", "confidence", "score"]
     palette = {"selected": "#e76f51", "non-selected": "#264653"}
-    rejected_palette = {"rejected": "#e9c46a"}
 
     selected_ids = {s.id for s in selected}
     non_sel = [o for o in accepted if o.id not in selected_ids]
 
-    # ---- Plot 1: non-selected quality distribution ----
-    df_ns = _build_df(non_sel, score_keys, "non-selected")
-    if len(df_ns) > 1:
-        _plot_violin_set(
-            df_ns, score_keys,
-            "Non-Selected — Quality Score Distribution",
-            output_dir / "violin_non_selected.png",
-        )
+    sep_idx = 3
 
-    # ---- Plot 2: selected quality distribution ----
+    df_ns = _build_df(non_sel, score_keys, "non-selected")
     df_sel = _build_df(selected, score_keys, "selected")
-    if len(df_sel) > 1:
-        _plot_violin_set(
-            df_sel, score_keys,
-            "Selected — Quality Score Distribution",
-            output_dir / "violin_selected.png",
-        )
+
+    if single_set_plots:
+        if len(df_ns) > 1:
+            _plot_violin_set(
+                df_ns, score_keys,
+                "Non-Selected — Quality Score Distribution",
+                output_dir / "violin_non_selected.png",
+                sep_index=sep_idx,
+            )
+            _plot_violin_set_scaled(
+                df_ns, score_keys,
+                "Non-Selected — Quality Score Distribution (scaled)",
+                output_dir / "violin_non_selected_scaled.png",
+                sep_index=sep_idx,
+            )
+        if len(df_sel) > 1:
+            _plot_violin_set(
+                df_sel, score_keys,
+                "Selected — Quality Score Distribution",
+                output_dir / "violin_selected.png",
+                sep_index=sep_idx,
+            )
+            _plot_violin_set_scaled(
+                df_sel, score_keys,
+                "Selected — Quality Score Distribution (scaled)",
+                output_dir / "violin_selected_scaled.png",
+                sep_index=sep_idx,
+            )
 
     # ---- Combined: selected vs non-selected side-by-side per score ----
     combined = pd.concat([df_ns, df_sel], ignore_index=True)
     if len(combined) > 1:
-        fig, axes = plt.subplots(1, len(score_keys), figsize=(3 * len(score_keys) + 1, 4.5))
+        n = len(score_keys)
+        fig, axes = _create_violin_figure(n, sep_idx)
+        if n == 1:
+            axes = [axes]
         for ax, key in zip(axes, score_keys):
-            groups = combined["group"].unique()
             data = []
             positions = []
             labels = []
@@ -132,36 +229,99 @@ def plot_quality_violins(accepted, rejected, selected, output_dir):
         plt.close(fig)
         print(f"  Saved {output_dir / 'violin_selected_vs_non_selected.png'}")
 
-    # ---- Plot 3: rejected raw metrics ----
-    rejected_raw_keys = ["laplacian", "tenengrad", "area_ratio", "border_ratio", "hand_overlap", "completeness"]
+    # ---- Scaled: zoomed-in per-subplot y-lim ----
+    combined_scaled = pd.concat([df_ns, df_sel], ignore_index=True)
+    if len(combined_scaled) > 1:
+        n = len(score_keys)
+        fig, axes = _create_violin_figure(n, sep_idx)
+        if n == 1:
+            axes = [axes]
+        for ax, key in zip(axes, score_keys):
+            data = []
+            positions = []
+            labels = []
+            for i, g in enumerate(["non-selected", "selected"]):
+                vals = combined_scaled.loc[combined_scaled["group"] == g, key].dropna().values
+                if len(vals) > 0:
+                    data.append(vals)
+                    positions.append(i + 1)
+                    labels.append(g)
+            if data:
+                vp = ax.violinplot(data, positions, showmeans=True, showmedians=False)
+                for j, body in enumerate(vp["bodies"]):
+                    body.set_facecolor(palette.get(labels[j], "#4ecdc4"))
+                    body.set_alpha(0.7)
+                ax.set_xticks(positions)
+                ax.set_xticklabels(labels, fontsize=8)
+
+            all_key_vals = combined_scaled[key].dropna().values
+            if len(all_key_vals) > 0:
+                vmin, vmax = all_key_vals.min(), all_key_vals.max()
+                margin = max((vmax - vmin) * 0.15, 0.005)
+                ax.set_ylim(vmin - margin, vmax + margin)
+
+            ax.set_title(key, fontsize=10)
+            ax.set_ylabel("Score" if key == score_keys[0] else "")
+        fig.suptitle("Selected vs Non-Selected — Quality Scores (scaled)", fontsize=12)
+        fig.tight_layout(rect=(0, 0, 1, 0.95))
+        fig.savefig(output_dir / "violin_selected_vs_non_selected_scaled.png", dpi=150)
+        plt.close(fig)
+        print(f"  Saved {output_dir / 'violin_selected_vs_non_selected_scaled.png'}")
+
+    # ---- Rejected vs accepted — normalized pre-filter metrics ----
+    rejected_raw_keys = ["laplacian", "tenengrad", "area_ratio", "border_free", "hand_overlap_free", "completeness"]
     readable_labels = {
         "laplacian": "Laplacian", "tenengrad": "Tenengrad",
-        "area_ratio": "Area Ratio", "border_ratio": "Border Ratio",
-        "hand_overlap": "Hand Overlap", "completeness": "Completeness",
+        "area_ratio": "Area Ratio", "border_free": "Border-Free Ratio",
+        "hand_overlap_free": "Hand-Free Ratio", "completeness": "Completeness",
     }
     df_rej = _build_df(rejected, rejected_raw_keys, "rejected")
     df_acc = _build_df(accepted, rejected_raw_keys, "accepted")
     combined_raw = pd.concat([df_rej, df_acc], ignore_index=True)
 
     if len(combined_raw) > 1:
-        n_raw = len(rejected_raw_keys)
-        fig, axes = plt.subplots(1, n_raw, figsize=(3 * n_raw + 1, 4.5))
-        for ax, key in zip(axes, rejected_raw_keys):
-            for i, (g, color) in enumerate([("rejected", "#e9c46a"), ("accepted", "#2a9d8f")]):
-                vals = combined_raw.loc[combined_raw["group"] == g, key].dropna().values
-                if len(vals) > 1:
-                    vp = ax.violinplot(vals, positions=[i + 1], showmeans=False, showmedians=True)
-                    vp["bodies"][0].set_facecolor(color)
-                    vp["bodies"][0].set_alpha(0.6)
-                    vp["cmedians"].set_color(color)
-            ax.set_xticks([1, 2])
-            ax.set_xticklabels(["rejected", "accepted"], fontsize=8)
-            ax.set_title(readable_labels.get(key, key), fontsize=10)
-        fig.suptitle("Rejected vs Accepted — Pre-Filter Raw Metrics", fontsize=12)
-        fig.tight_layout(rect=(0, 0, 1, 0.95))
-        fig.savefig(output_dir / "violin_rejected_vs_accepted.png", dpi=150)
-        plt.close(fig)
-        print(f"  Saved {output_dir / 'violin_rejected_vs_accepted.png'}")
+        for suffix, scaled in [("", False), ("_scaled", True)]:
+            n_raw = len(rejected_raw_keys)
+            fig, axes = plt.subplots(1, n_raw, figsize=(3 * n_raw + 1, 4.5))
+            for ax, key in zip(axes, rejected_raw_keys):
+                all_vals = combined_raw[key].dropna().values
+                vmin_all, vmax_all = all_vals.min(), all_vals.max()
+                for i, (g, color) in enumerate([("rejected", "#e9c46a"), ("accepted", "#2a9d8f")]):
+                    vals = combined_raw.loc[combined_raw["group"] == g, key].dropna().values
+                    if len(vals) > 1:
+                        if vmax_all > vmin_all:
+                            vals_norm = (vals - vmin_all) / (vmax_all - vmin_all)
+                        else:
+                            vals_norm = vals * 0.0
+                        vp = ax.violinplot(vals_norm, positions=[i + 1], showmeans=False, showmedians=True)
+                        vp["bodies"][0].set_facecolor(color)
+                        vp["bodies"][0].set_alpha(0.6)
+                        vp["cmedians"].set_color(color)
+                ax.set_xticks([1, 2])
+                ax.set_xticklabels(["rejected", "accepted"], fontsize=8)
+                ax.set_title(readable_labels.get(key, key), fontsize=10)
+
+                if scaled:
+                    local_vals = combined_raw[key].dropna().values
+                    if vmax_all > vmin_all:
+                        local_norm = (local_vals - vmin_all) / (vmax_all - vmin_all)
+                    else:
+                        local_norm = local_vals * 0.0
+                    vmin_z, vmax_z = local_norm.min(), local_norm.max()
+                    margin = max((vmax_z - vmin_z) * 0.15, 0.005)
+                    ax.set_ylim(vmin_z - margin, vmax_z + margin)
+                else:
+                    ax.set_ylim(-0.05, 1.05)
+
+            title_text = "Rejected vs Accepted — Pre-Filter Metrics (normalised [0,1])"
+            if scaled:
+                title_text += " — scaled"
+            fig.suptitle(title_text, fontsize=12)
+            fig.tight_layout(rect=(0, 0, 1, 0.95))
+            fname = f"violin_rejected_vs_accepted{suffix}.png"
+            fig.savefig(output_dir / fname, dpi=150)
+            plt.close(fig)
+            print(f"  Saved {output_dir / fname}")
 
 
 def plot_selection_process(accepted, selected, embeddings, selected_idx, quality_scores, output_dir):
@@ -189,17 +349,19 @@ def plot_selection_process(accepted, selected, embeddings, selected_idx, quality
     # ---- Figure: embedding scatter + selection ----
     fig, ax = plt.subplots(1, 1, figsize=(10, 8))
 
+    cmap = "jet"
+
     sc = ax.scatter(
         non_sel_coords[:, 0], non_sel_coords[:, 1],
-        c=non_sel_qual, cmap="viridis", s=20, alpha=0.5, vmin=0, vmax=1,
+        c=non_sel_qual, cmap=cmap, s=20, alpha=0.5, vmin=0, vmax=1,
         label="non-selected",
     )
 
-    cmap = plt.get_cmap("viridis")
-    sel_colors = cmap(sel_qual)
+    cmap_obj = plt.get_cmap(cmap)
+    sel_colors = cmap_obj(sel_qual)
     ax.scatter(
         sel_coords[:, 0], sel_coords[:, 1],
-        c=sel_colors, s=100, marker="o", edgecolors="red", linewidths=1.5,
+        c=sel_colors, s=100, marker="o", edgecolors="black", linewidths=1.5,
         label="selected", zorder=5,
     )
 
@@ -208,10 +370,9 @@ def plot_selection_process(accepted, selected, embeddings, selected_idx, quality
             str(i + 1),
             coords[idx],
             xytext=(5, 5), textcoords="offset points",
-            fontsize=8, fontweight="bold", color="red",
+            fontsize=8, fontweight="bold", color="black",
         )
 
-    sel_idx_arr = list(selected_idx)
     for i in range(len(coords)):
         if i in selected_set:
             continue
@@ -227,6 +388,14 @@ def plot_selection_process(accepted, selected, embeddings, selected_idx, quality
     ax.set_ylabel(f"PC2 ({var_ratio[1]:.1%} variance)")
     ax.set_title("View Selection — Embedding Space (PCA)")
     ax.legend(loc="best")
+
+    ax.text(
+        0.98, 0.02,
+        "Grey lines: each non-selected view → its nearest selected view (cosine similarity)",
+        transform=ax.transAxes, fontsize=8, ha="right", va="bottom",
+        color="gray", style="italic",
+    )
+
     fig.tight_layout()
     fig.savefig(output_dir / "selection_embedding.png", dpi=150)
     plt.close(fig)
@@ -260,8 +429,8 @@ def plot_selection_process(accepted, selected, embeddings, selected_idx, quality
             print(f"  Saved {output_dir / 'rejection_reasons.png'}")
 
 
-def plot_all(accepted, rejected, selected, embeddings, selected_idx, quality_scores, output_dir):
+def plot_all(accepted, rejected, selected, embeddings, selected_idx, quality_scores, output_dir, single_set_plots=True):
     print("Generating pipeline plots...")
-    plot_quality_violins(accepted, rejected, selected, output_dir)
+    plot_quality_violins(accepted, rejected, selected, output_dir, single_set_plots=single_set_plots)
     plot_selection_process(accepted, selected, embeddings, selected_idx, quality_scores, output_dir)
     print("Done.")

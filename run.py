@@ -225,6 +225,21 @@ def run_pipeline(cfg: PipelineConfig):
 
     print(f"Accepted: {len(accepted)}, Rejected: {len(rejected)}")
 
+    if cfg.debug:
+        rejection_counts = {}
+        for obs in rejected:
+            r = obs.rejection_reason or "unknown"
+            rejection_counts[r] = rejection_counts.get(r, 0) + 1
+        print("  Rejection breakdown:")
+        for reason, count in sorted(rejection_counts.items(), key=lambda x: -x[1]):
+            print(f"    {reason}: {count}")
+        if accepted:
+            raw_metrics = ["laplacian", "tenengrad", "area_ratio", "border_ratio", "hand_overlap", "completeness"]
+            print("  Accepted raw metrics:")
+            for key in raw_metrics:
+                vals = np.array([getattr(o.metrics, key, 0) for o in accepted])
+                print(f"    {key}: min={vals.min():.4f}  max={vals.max():.4f}  mean={vals.mean():.4f}  median={np.median(vals):.4f}")
+
     if len(accepted) == 0:
         print("No observations passed filtering. Exiting.")
         return
@@ -239,6 +254,15 @@ def run_pipeline(cfg: PipelineConfig):
             obs.metrics.occlusion,
             obs.metrics.completeness,
         )
+
+    if cfg.debug:
+        quality_keys = ["blur", "area", "occlusion", "completeness", "confidence"]
+        print("  Quality scores:")
+        for key in quality_keys:
+            vals = np.array([getattr(o.metrics, key, 0) for o in accepted])
+            print(f"    {key}: min={vals.min():.4f}  max={vals.max():.4f}  mean={vals.mean():.4f}  median={np.median(vals):.4f}")
+        qvals = np.array([o.quality for o in accepted])
+        print(f"    score:  min={qvals.min():.4f}  max={qvals.max():.4f}  mean={qvals.mean():.4f}  median={np.median(qvals):.4f}")
 
     if cfg.use_shape_descriptors or embedding_model is None:
         for obs in tqdm(accepted, desc="Extracting descriptors"):
@@ -260,6 +284,11 @@ def run_pipeline(cfg: PipelineConfig):
     selected = [accepted[i] for i in selected_idx]
     print(f"Selected {len(selected)} views")
 
+    if cfg.debug:
+        sel_qual = quality_scores[selected_idx]
+        print(f"  Selected quality: min={sel_qual.min():.4f}  max={sel_qual.max():.4f}  mean={sel_qual.mean():.4f}")
+        print(f"  Pool quality:     min={quality_scores.min():.4f}  max={quality_scores.max():.4f}  mean={quality_scores.mean():.4f}")
+
     selected_set = {s.id for s in selected}
 
     quality_csv = []
@@ -267,10 +296,12 @@ def run_pipeline(cfg: PipelineConfig):
         row = {
             "id": obs.id,
             "quality": obs.quality,
+            "score": obs.quality,
             "laplacian": obs.metrics.laplacian,
             "tenengrad": obs.metrics.tenengrad,
             "area_ratio": obs.metrics.area_ratio,
             "border_ratio": obs.metrics.border_ratio,
+            "border_free": 1.0 - obs.metrics.border_ratio,
             "hand_overlap": obs.metrics.hand_overlap,
             "solidity": obs.metrics.solidity,
             "extent": obs.metrics.extent,
@@ -423,7 +454,7 @@ def run_pipeline(cfg: PipelineConfig):
     if cfg.save_plots:
         try:
             from utils.plotting import plot_all
-            plot_all(accepted, rejected, selected, embeddings, selected_idx, quality_scores, output_dir)
+            plot_all(accepted, rejected, selected, embeddings, selected_idx, quality_scores, output_dir, single_set_plots=cfg.debug)
         except Exception as e:
             print(f"Plotting failed: {e}")
 
@@ -449,6 +480,8 @@ if __name__ == "__main__":
                         choices=["hu", "zernike", "fourier", "shape_context"])
     parser.add_argument("--plot", action="store_true", dest="save_plots",
                         help="Generate pipeline diagnostic plots")
+    parser.add_argument("--debug", action="store_true",
+                        help="Verbose terminal output with per-step statistics; also enables single-set violin plots (requires --plot)")
     args = parser.parse_args()
 
     cfg = PipelineConfig(
@@ -461,5 +494,6 @@ if __name__ == "__main__":
         use_shape_descriptors=args.use_shape_descriptors,
         shape_descriptor=args.shape_descriptor,
         save_plots=args.save_plots,
+        debug=args.debug,
     )
     run_pipeline(cfg)
