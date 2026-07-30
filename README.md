@@ -1,19 +1,20 @@
 # Object View Selection
 
-Select the best **N image/mask pairs** that maximize **object identifiability** — high-quality, diverse, non-redundant viewpoints.
-
-## Pipeline
+Select the best **N image/mask pairs** that maximize **object identifiability** — high-quality, diverse, non-redundant viewpoints of a single object.
 
 ```
-Dataset → Pre-filter → Quality Score → Embeddings → Subset Selection → Outputs
+Dataset → Auto-Threshold → Pre-Filter → Quality Score → Embeddings → Subset Selection → Outputs
 ```
 
 | Stage | What it does |
 |-------|-------------|
-| **Pre-filter** | Rejects blurry, truncated, occluded, or tiny observations |
-| **Quality Score** | Weighted combination of blur, area, occlusion, confidence, completeness |
-| **Embeddings** | DINOv3 / DINOv2 / SigLIP / CLIP / EVA-CLIP features (or shape descriptors) |
+| **Auto-Threshold** | Computes data-driven filter thresholds from dataset statistics (percentile + safety clamp) |
+| **Pre-filter** | Rejects blurry, truncated, occluded, tiny, or incomplete observations (6 filter modules) |
+| **Quality Score** | Weighted combination of blur, area, occlusion, completeness scores |
+| **Embeddings** | DINOv3 / DINOv2 / SigLIP / CLIP / EVA-CLIP features (or classical shape descriptors on CPU) |
 | **Selection** | Greedy quality+diversity, FPS, Facility Location, DPP, or NBV |
+
+See [`docs/pipeline.md`](docs/pipeline.md) for detailed module descriptions and [`docs/thresholds.md`](docs/thresholds.md) for the auto-tuning strategy.
 
 ## Installation
 
@@ -46,26 +47,40 @@ bottle/
 ## Usage
 
 ```bash
-# DINOv3 embeddings (default, requires torch + transformers)
+# Run the full pipeline (auto-tuning enabled by default)
+python run.py --data_root /path/to/bottle --num_views 10 --output_dir ./outputs
+
+# Disable auto-threshold tuning (use static config values instead)
+python run.py --data_root /path/to/bottle --num_views 10 --no-auto-thresholds
+
+# DINOv3 embeddings (default model: dinov3-vitb16)
 python run.py --data_root /path/to/bottle --num_views 10
 
-# Switch DINOv3 model variant (auto-detected from model name)
-python run.py --data_root /path/to/bottle --embedding_model facebook/dinov3-vitl16-pretrain-lvd1689m
-python run.py --data_root /path/to/bottle --embedding_model facebook/dinov3-vits16-pretrain-lvd1689m
+# Switch model (auto-detected from name)
+python run.py --data_root /path/to/bottle \
+  --embedding_model facebook/dinov3-vitl16-pretrain-lvd1689m
 
-# SigLIP2 or MoonViT (auto-detected)
-python run.py --data_root /path/to/bottle --embedding_model google/siglip2-base-patch16-224
-python run.py --data_root /path/to/bottle --embedding_model moonshotai/MoonViT-SO-400M
+# SigLIP2 or MoonViT
+python run.py --data_root /path/to/bottle \
+  --embedding_model google/siglip2-base-patch16-224
+python run.py --data_root /path/to/bottle \
+  --embedding_model moonshotai/MoonViT-SO-400M
 
-# Explicitly override type (e.g. fall back to DINOv2)
-python run.py --data_root /path/to/bottle --embedding dinov2 --embedding_model dinov2_vitb14_reg
+# Explicit type override (e.g. fall back to DINOv2)
+python run.py --data_root /path/to/bottle \
+  --embedding dinov2 --embedding_model dinov2_vitb14_reg
 
-# Shape descriptors (no GPU needed, no torch required)
-python run.py --data_root /path/to/bottle --use_shape_descriptors --num_views 10
-python run.py --data_root /path/to/bottle --use_shape_descriptors --shape_descriptor zernike
+# Shape descriptors (CPU only, no GPU needed)
+python run.py --data_root /path/to/bottle \
+  --use_shape_descriptors --num_views 10
+python run.py --data_root /path/to/bottle \
+  --use_shape_descriptors --shape_descriptor zernike
 
-# Custom selector
+# Different selection strategies
+python run.py --data_root /path/to/bottle --selector fps --num_views 10
 python run.py --data_root /path/to/bottle --selector dpp --num_views 10
+python run.py --data_root /path/to/bottle \
+  --selector quality_diversity --selector_alpha 0.3 --selector_beta 0.7
 ```
 
 ### Arguments
@@ -78,86 +93,134 @@ python run.py --data_root /path/to/bottle --selector dpp --num_views 10
 | `--embedding` | `auto` | `auto`, `dinov3`, `dinov2`, `siglip2`, `siglip`, `moonvit`, `clip`, `eva_clip` |
 | `--embedding_model` | `facebook/dinov3-vitb16-pretrain-lvd1689m` | Model name or path; type inferred automatically when `--embedding=auto` |
 | `--selector` | `quality_diversity` | `fps`, `quality_diversity`, `facility_location`, `dpp`, `next_best_view` |
-| `--use_shape_descriptors` | `False` | Use classical shape descriptors |
+| `--selector_alpha` | `0.4` | Quality weight for GQD selector |
+| `--selector_beta` | `0.6` | Diversity weight for GQD selector |
+| `--use_shape_descriptors` | `False` | Use classical shape descriptors (CPU) |
 | `--shape_descriptor` | `hu` | `hu`, `zernike`, `fourier`, `shape_context` |
+| `--no-auto-thresholds` | `False` | Disable data-driven threshold tuning |
 
 ## Output Structure
 
 ```
 outputs/
-├── selected/              # Selected images
+├── selected/              # Selected images (PNG)
 ├── selected_masks/        # Corresponding masks
-├── selected_object_hands/ # Corresponding hand masks
+├── selected_object_hands/ # Corresponding hand masks (if available)
 ├── rejected/              # Rejected images (if save_rejected=True)
 ├── rejected_masks/        # Rejected masks
-├── report.json            # Pipeline summary
-├── quality.csv            # Per-observation metrics
-├── embeddings.npy         # Embedding matrix
-├── selected_indices.npy   # Selected indices
-├── rejected.json          # Rejection reasons
-└── visualization.png      # Overview grid
+├── report.json            # Pipeline summary + selection metrics
+├── quality.csv            # Per-observation quality metrics
+├── embeddings.npy         # Embedding matrix (accepted pool)
+├── selected_indices.npy   # Selected indices into embedding matrix
+├── rejected.json          # Per-observation rejection reasons
+└── visualization.png      # Overview grid of selected views
 ```
 
 ## Configuration
 
-All pipeline parameters are controlled via `config.py`. Key settings:
-
-```python
-PipelineConfig(
-    filters=FilterConfig(
-        filter_order=["border", "area", "confidence", "blur", "occlusion", "completeness"],
-        blur=BlurConfig(threshold=120.0),
-        area=AreaConfig(minimum_ratio=0.01),
-        border=BorderConfig(maximum_ratio=0.05),
-        occlusion=OcclusionConfig(maximum_overlap=0.15),
-    ),
-    embedding="dinov3",
-    embedding_model="facebook/dinov3-vitb16-pretrain-lvd1689m",
-    selector="quality_diversity",
-    num_views=10,
-    quality_weights=QualityWeights(
-        blur=0.25, area=0.20, occlusion=0.20, completeness=0.25
-    ),
-)
-```
+All pipeline parameters are controlled via `config.py`. See [`docs/thresholds.md`](docs/thresholds.md) for the auto-tuning strategy and [`docs/pipeline.md`](docs/pipeline.md) for full module documentation.
 
 ## Testing
 
-Each filter, module, and selector is validated against synthetic data with known correct
-outputs (49 tests). The test data is **generated programmatically** in
-`test_correctness.py` — no external labeled dataset is needed:
+The project has **86 correctness tests** and **51 smoke tests**.
 
-- **Blur filter**: sharp circle vs. Gaussian-blurred circle — sharp has higher Laplacian/Tenengrad
-- **Area filter**: 50%-area mask passes, 1%-area mask fails a 2% threshold
-- **Border filter**: centered vs. edge-touching masks
-- **Occlusion filter**: non-overlapping vs. overlapping hand masks
-- **Confidence filter**: confidence above/below threshold
-- **Completeness filter**: solid vs. perforated mask
-- **Filters pipeline**: all six filters in the correct order
-- **Quality scorer**: weighted combination with known values
-- **Embedding models**: DINOv3, SigLIP2, DINOv2, SigLIP, CLIP, EVA-CLIP encode random input to correct dimension
-- **Shape descriptors**: Hu, Zernike, Fourier, Shape Context return fixed-size vectors
-- **Selectors**: FPS, quality+diversity, facility location, DPP, NBV produce exactly N views
-- **Metrics dataclass**: defaults and setters
+### Correctness Tests
+
+Each filter, module, and selector is validated against **synthetic data** with known correct
+outputs — no external labeled dataset needed:
 
 ```bash
 # Run all correctness tests
-python test_correctness.py
+python tests/run_correctness.py
 
-# Expected output: 49 passed, 0 failed out of 49
+# Expected output: 86 passed, 0 failed out of 86
+```
+
+### Smoke Tests
+
+Run the full pipeline against a real dataset to verify end-to-end integration:
+
+```bash
+python tests/run_smoke.py --data_root /path/to/bottle
 ```
 
 ## Project Structure
 
 ```
 object_view_selection/
-├── run.py              # Pipeline entry point
-├── config.py           # Configuration
-├── data_io/            # Dataset loader + Observation dataclass
-├── preprocessing/      # Blur, truncation, area, occlusion, confidence, completeness
-├── quality/            # Quality metrics + weighted scorer
-├── embeddings/         # DINOv2, SigLIP, CLIP, EVA-CLIP
-├── descriptors/        # Hu, Zernike, Fourier, Shape Context
-├── selection/          # FPS, Quality+Diversity, Facility Location, DPP, NBV
-└── utils/              # Geometry, math, visualization
+├── run.py                    # Pipeline entry point
+├── config.py                 # All configuration dataclasses
+│
+├── data_io/
+│   ├── observation.py        # Observation dataclass (image, mask, hand, quality, embedding)
+│   ├── dataset.py            # Dataset loader (loads images/, masks/, object_hands/)
+│   └── metrics.py            # ObservationMetrics dataclass
+│
+├── preprocessing/
+│   ├── base.py               # Abstract BaseFilter
+│   ├── filter_pipeline.py    # Chains filters, rejects on first failure
+│   ├── blur_filter.py        # Laplace + Tenengrad sharpness
+│   ├── area_filter.py        # Min object size
+│   ├── border_truncation.py  # Edge-touching detection
+│   ├── occlusion_filter.py   # Hand/mask overlap
+│   ├── confidence.py         # Detector confidence gate (disabled by default)
+│   └── completeness_filter.py# Solidity, extent, convexity
+│
+├── quality/
+│   ├── base.py               # Abstract QualityMetric
+│   ├── quality_scorer.py     # Weighted sum scorer
+│   ├── blur.py               # BlurQuality (normalized by 2× threshold)
+│   ├── area.py               # AreaQuality (ratio up to 20%)
+│   ├── occlusion.py          # OcclusionQuality (1 - overlap)
+│   ├── completeness.py       # CompletenessQuality (pass-through)
+│   └── confidence.py         # ConfidenceQuality (pass-through, unused by scorer)
+│
+├── embeddings/
+│   ├── base.py               # Abstract EmbeddingModel
+│   ├── crop.py               # Bbox / masked / square cropping
+│   ├── dinov3.py             # DINOv3 (ViT)
+│   ├── dinov2.py             # DINOv2 (ViT)
+│   ├── siglip2.py            # SigLIP2
+│   ├── siglip.py             # SigLIP
+│   ├── moonvit.py            # MoonViT
+│   ├── clip.py               # OpenAI CLIP
+│   └── eva_clip.py           # EVA-CLIP
+│
+├── descriptors/
+│   ├── hu.py                 # Hu moments (7-dim)
+│   ├── zernike.py            # Zernike moments (27-dim)
+│   ├── fourier.py            # Fourier descriptors (32-dim)
+│   └── shape_context.py      # Shape Context (60-dim)
+│
+├── selection/
+│   ├── selector.py           # Abstract SubsetSelector
+│   ├── fps.py                # FarthestPointSampling
+│   ├── greedy_quality_diversity.py  # GQD (default)
+│   ├── facility_location.py  # Facility Location
+│   ├── dpp.py                # Determinantal Point Process
+│   └── next_best_view.py     # Next Best View
+│
+├── utils/
+│   ├── threshold_tuner.py    # Data-driven auto-thresholding
+│   ├── visualization.py      # Overview grid saving
+│   └── ...
+│
+├── tests/
+│   ├── run_correctness.py    # Correctness test runner
+│   ├── run_smoke.py          # Smoke test runner
+│   ├── test_utils.py         # Shared helpers (make_circle_mask, make_flower, check)
+│   ├── smoke_test_utils.py   # Smoke test helpers
+│   ├── correctness_test_units/  # Test modules (86 tests)
+│   └── smoke_test_units/        # Smoke test modules (51 tests)
+│
+├── docs/
+│   ├── pipeline.md           # Detailed pipeline documentation
+│   └── thresholds.md         # Threshold auto-tuning reference
+│
+└── README.md
 ```
+
+## Further Reading
+
+- [`docs/pipeline.md`](docs/pipeline.md) — Detailed module descriptions, algorithm explanations, configuration reference
+- [`docs/thresholds.md`](docs/thresholds.md) — Auto-tuning strategy, safety limits, percentile rules, override instructions
