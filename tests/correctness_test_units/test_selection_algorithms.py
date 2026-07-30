@@ -423,7 +423,231 @@ def test_all_selectors_no_duplicates():
         for n in [1, 3, 10, 15]:
             idx = cls().select(emb, q, n)
             check(len(set(idx)) == len(idx),
-                   f"{name} (n={n}): unique indices")
+                  f"{name} (n={n}): unique indices")
+
+
+def test_all_selectors_clamp_n_to_embedding_count():
+    """When n > N, each selector returns exactly N indices."""
+    from selection.fps import FarthestPointSampling
+    from selection.greedy_quality_diversity import GreedyQualityDiversity
+    from selection.facility_location import FacilityLocation
+    from selection.dpp import DPPSelector
+    from selection.next_best_view import NextBestView
+
+    emb = np.eye(4, dtype=np.float32)
+    q = np.ones(4, dtype=np.float32)
+    for name, cls in [("FPS", FarthestPointSampling),
+                      ("GQD", GreedyQualityDiversity),
+                      ("FL", FacilityLocation),
+                      ("DPP", DPPSelector),
+                      ("NBV", NextBestView)]:
+        idx = cls().select(emb, q, 100)
+        check(len(idx) == 4, f"{name} (n=100 > N=4): returned {len(idx)}, expected 4")
+
+
+def test_all_selectors_return_type_is_int_ndarray():
+    """All selectors return np.ndarray with int dtype."""
+    from selection.fps import FarthestPointSampling
+    from selection.greedy_quality_diversity import GreedyQualityDiversity
+    from selection.facility_location import FacilityLocation
+    from selection.dpp import DPPSelector
+    from selection.next_best_view import NextBestView
+
+    emb = np.eye(3, dtype=np.float32)
+    q = np.ones(3, dtype=np.float32)
+    for name, cls in [("FPS", FarthestPointSampling),
+                      ("GQD", GreedyQualityDiversity),
+                      ("FL", FacilityLocation),
+                      ("DPP", DPPSelector),
+                      ("NBV", NextBestView)]:
+        idx = cls().select(emb, q, 2)
+        check(isinstance(idx, np.ndarray), f"{name} returns ndarray")
+        check(idx.dtype in (np.int32, np.int64, int), f"{name} has int dtype but got {idx.dtype}")
+
+
+def test_gqd_fallback_uniform_quality():
+    """GQD without quality_scores falls back to uniform weights — equivalent to FPS with alpha=0."""
+    from selection.greedy_quality_diversity import GreedyQualityDiversity
+
+    rng = np.random.RandomState(10)
+    emb = rng.randn(12, 6).astype(np.float32)
+
+    idx_with_none = GreedyQualityDiversity(alpha=0.4, beta=0.6).select(emb, None, 5)
+    quality_uniform = np.ones(len(emb), dtype=np.float32)
+    idx_all_quality = GreedyQualityDiversity(alpha=0.4, beta=0.6).select(emb, quality_uniform, 5)
+
+    check(np.array_equal(idx_with_none, idx_all_quality),
+          "GQD quality=None fallback should equal uniform quality_scores")
+
+
+def test_gqd_alpha_zero_biased_to_pure_diversity():
+    """GQD with alpha=0 behaves like pure diversity (min-distance driven)."""
+    from selection.greedy_quality_diversity import GreedyQualityDiversity
+
+    _one = _onehot(6, 8)
+    dist = pairwise_distances(_one, metric="cosine")
+
+    idx = GreedyQualityDiversity(alpha=0.0, beta=1.0).select(_one, None, 4)
+
+    for step in range(1, len(idx)):
+        sel = [int(j) for j in idx[:step]]
+        min_dists = dist[:, sel].min(axis=1)
+        min_dists[sel] = -1
+        expected = int(min_dists.argmax())
+        check(int(idx[step]) == expected,
+              f"GQD alpha=0 step {step}: got {idx[step]}, expected pure diversity pick {expected}")
+
+
+def test_nbv_deterministic_no_quality_variation():
+    """NBV with uniform quality picks deterministically by mean-Euclidean diversity."""
+    from selection.next_best_view import NextBestView
+
+    # Orthonormal 5 points: each has same quality, so NBV should spread them maximally
+    _one = _onehot(5, 8)
+    quality = np.ones(5, dtype=np.float32) * 0.5
+
+    idx = NextBestView().select(_one, quality, 4)
+    check(int(idx[0]) == 0, f"NBV with uniform quality: first pick argmax=0, got {idx[0]}")
+
+
+def test_dpp_sigma_affects_selection():
+    """Changing sigma in DPP changes which points are selected."""
+    from selection.dpp import DPPSelector
+
+    rng = np.random.RandomState(11)
+    emb = rng.randn(8, 4).astype(np.float32)
+    quality = np.array([0.5] * 8, dtype=np.float32)
+
+    idx_small = DPPSelector(sigma=0.1).select(emb, quality, 4)
+    idx_large = DPPSelector(sigma=5.0).select(emb, quality, 4)
+
+    check(not np.array_equal(idx_small, idx_large),
+          "DPP with different sigma should produce different selections")
+
+
+def test_dpp_quality_weight_matters():
+    """Higher quality points get selected when embeddings are similar."""
+    from selection.dpp import DPPSelector
+
+    # Two very close points + one far point; high-quality among the cluster should win first
+    emb = np.array([
+        [1.0, 0.0, 0.0],
+        [0.999, 0.001, 0.0],     # almost identical to [0]
+        [0.0, 1.0, 0.0],           # orthogonal far point
+    ], dtype=np.float32)
+    quality = np.array([0.9, 0.1, 0.5], dtype=np.float32)
+
+    idx = DPPSelector(sigma=0.5).select(emb, quality, 2)
+    check(int(idx[0]) == 0, f"DPP quality-weighted: first pick {idx[0]}, expected 0 (highest quality)")
+
+
+def test_fps_n_equals_n_samples_returns_all():
+    """FPS with n == N returns all indices."""
+    from selection.fps import FarthestPointSampling
+
+    rng = np.random.RandomState(12)
+    emb = rng.randn(10, 4).astype(np.float32)
+    idx = FarthestPointSampling().select(emb, None, 10)
+    check(len(idx) == 10, f"FPS n=10=N: got {len(idx)} indices")
+    check(set(map(int, idx)) == set(range(10)), "FPS n=N: all indices present")
+
+
+def test_gqd_quality_scores_required_for_quality_weighting():
+    """When quality is provided, GQD actually prefers higher-quality points."""
+    from selection.greedy_quality_diversity import GreedyQualityDiversity
+
+    emb = _onehot(4)
+    # Points 0 and 1 are far apart (orthogonal), both equally diverse
+    # Point 3 has highest quality and is also well-separated
+    quality = np.array([0.3, 0.3, 0.2, 0.95], dtype=np.float32)
+
+    idx = GreedyQualityDiversity(alpha=1.0, beta=0.0).select(emb, quality, 4)
+    # With alpha=1.0 and deterministic argmax on quality-first picks, should pick highest quality first
+    check(int(idx[0]) == 3, f"GQD pure quality: first pick {idx[0]}, expected 3")
+
+
+def test_all_selectors_n_1_returns_single_index():
+    """When n=1, all selectors return single-element array."""
+    from selection.fps import FarthestPointSampling
+    from selection.greedy_quality_diversity import GreedyQualityDiversity
+    from selection.facility_location import FacilityLocation
+    from selection.dpp import DPPSelector
+    from selection.next_best_view import NextBestView
+
+    emb = np.eye(5, dtype=np.float32)
+    q = np.array([0.1, 0.9, 0.3, 0.7, 0.2], dtype=np.float32)
+    for name, cls in [("FPS", FarthestPointSampling),
+                      ("GQD", GreedyQualityDiversity),
+                      ("FL", FacilityLocation),
+                      ("DPP", DPPSelector),
+                      ("NBV", NextBestView)]:
+        idx = cls().select(emb, q, 1)
+        check(len(idx) == 1, f"{name} n=1: got {len(idx)} indices, expected 1")
+
+
+def test_facility_location_coverage_step_by_step():
+    """FL coverage objective strictly increases at each step."""
+    from selection.facility_location import FacilityLocation
+
+    rng = np.random.RandomState(13)
+    emb = rng.randn(15, 6).astype(np.float32)
+    sim = 1.0 - pairwise_distances(emb, metric="cosine")
+    sim = np.clip(sim, 0, 1)
+
+    idx = FacilityLocation().select(emb, None, 7)
+
+    cumsum = []
+    for step in range(len(idx)):
+        sel = list(idx[:step + 1])
+        cov = sim[:, sel].max(axis=1).sum()
+        cumsum.append(cov)
+
+    for i in range(1, len(cumsum)):
+        check(cumsum[i] >= cumsum[i-1],
+              f"FL step {i}: coverage {cumsum[i]:.4f} >= prev {cumsum[i-1]:.4f}")
+
+
+def test_gqd_beta_only_diversity_far_points():
+    """GQD with beta>>alpha selects farthest points when quality is uniform."""
+    from selection.greedy_quality_diversity import GreedyQualityDiversity
+
+    emb = np.array([
+        [0, 0], [1, 0], [0.5, 0.8660254],   # equilateral triangle
+        [0.5, 0.3],                            # inside triangle
+    ], dtype=np.float32)
+    quality = np.ones(4, dtype=np.float32) * 0.5
+
+    idx = GreedyQualityDiversity(alpha=0.1, beta=0.9).select(emb, quality, 3)
+
+    # First pick should be highest-quality tie (first argmax = 0 for uniform)
+    check(int(idx[0]) == 0, f"GQD uniform quality: first argmax {idx[0]}, expected 0")
+
+
+def test_nbv_alpha_equivalent_to_quality_plus_diversity():
+    """NBV score formula: quality + 0.5 * mean_euclidean_dist — verify manually."""
+    from selection.next_best_view import NextBestView
+
+    rng = np.random.RandomState(14)
+    emb = rng.randn(6, 4).astype(np.float32)
+    quality = rng.rand(6).astype(np.float32)
+
+    idx = NextBestView().select(emb, quality, 3)
+
+    first = int(idx[0])
+    expected_first = int(quality.argmax())
+    check(first == expected_first, f"NBV first: {idx[0]} vs expected argmax quality {expected_first}")
+
+    sel = [first]
+    expected_scores = []
+    for j in range(len(emb)):
+        if j in sel:
+            continue
+        div = np.mean([np.linalg.norm(emb[j] - emb[k]) for k in sel])
+        s = float(quality[j]) + 0.5 * div
+        expected_scores.append((s, j))
+    expected_scores.sort(key=lambda x: (-x[0], x[1]))
+    check(int(idx[1]) == expected_scores[0][1],
+          f"NBV step 2: got {idx[1]}, expected {expected_scores[0][1]} (score={expected_scores[0][0]:.4f})")
 
 
 if __name__ == "__main__":

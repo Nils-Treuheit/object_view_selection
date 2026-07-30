@@ -26,7 +26,7 @@ class FacilityLocation(SubsetSelector):
             for i in range(len(embeddings)):
                 if i in idx:
                     continue
-                obj = sim[:, idx].max(axis=1).sum()
+                obj = sim[:, idx + [i]].max(axis=1).sum()
                 if obj > best_obj:
                     best_obj = obj
                     best_i = i
