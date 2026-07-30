@@ -420,6 +420,13 @@ def run_pipeline(cfg: PipelineConfig):
         except Exception as e:
             print(f"Visualization failed: {e}")
 
+    if cfg.save_plots:
+        try:
+            from utils.plotting import plot_all
+            plot_all(accepted, rejected, selected, embeddings, selected_idx, quality_scores, output_dir)
+        except Exception as e:
+            print(f"Plotting failed: {e}")
+
 
 if __name__ == "__main__":
     import argparse
@@ -440,6 +447,8 @@ if __name__ == "__main__":
                         help="Use classical shape descriptors instead of learned embeddings")
     parser.add_argument("--shape_descriptor", type=str, default="hu",
                         choices=["hu", "zernike", "fourier", "shape_context"])
+    parser.add_argument("--plot", action="store_true", dest="save_plots",
+                        help="Generate pipeline diagnostic plots")
     args = parser.parse_args()
 
     cfg = PipelineConfig(
@@ -451,5 +460,6 @@ if __name__ == "__main__":
         selector=args.selector,
         use_shape_descriptors=args.use_shape_descriptors,
         shape_descriptor=args.shape_descriptor,
+        save_plots=args.save_plots,
     )
     run_pipeline(cfg)

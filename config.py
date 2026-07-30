@@ -85,3 +85,4 @@ class PipelineConfig:
     save_visualization: bool = True
     save_rejected: bool = True
     save_embeddings: bool = True
+    save_plots: bool = False
