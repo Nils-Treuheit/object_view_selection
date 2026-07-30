@@ -69,6 +69,7 @@ def main():
         test_crops,
         test_metrics,
         test_plotting,
+        test_selection_algorithms,
     )
 
     modules = [
@@ -82,6 +83,7 @@ def main():
         ("Crop functions", test_crops),
         ("Metrics dataclass", test_metrics),
         ("Plotting", test_plotting),
+        ("Selection algorithms (algorithmic)", test_selection_algorithms),
     ]
 
     for name, module in modules:

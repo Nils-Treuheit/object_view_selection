@@ -78,6 +78,7 @@ def main():
         "tests.correctness_test_units.test_crops",
         "tests.correctness_test_units.test_metrics",
         "tests.correctness_test_units.test_plotting",
+        "tests.correctness_test_units.test_selection_algorithms",
     ]
 
     for mod_name in modules:
