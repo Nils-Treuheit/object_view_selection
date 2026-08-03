@@ -67,6 +67,12 @@ class VincentsMotionBlurConfig:
     enabled: bool = True
     softness: float = 0.3
     stroke_width: int = 9
+    # Absolute hard-reject floor on the boundary-band Laplacian variance.
+    # Frames whose object boundary is smeared/blurred (motion blur) score far
+    # below sharp datasets (e.g. < ~150 on 480x640 triprong vs > 1400 min on
+    # bottle), so this excludes the motion-blurred tail that the soft weight
+    # would otherwise merely down-rank. 0 disables the hard reject.
+    hard_min_variance: float = 120.0
 
 
 @dataclass
@@ -128,7 +134,7 @@ class QualityFloorConfig:
     enabled: bool = True
     percentile: float = 0.10
     minimum_pool: int = 20
-    absolute_min: float = 0.5
+    absolute_min: float = 0.66
 
 
 @dataclass
@@ -147,8 +153,8 @@ class PipelineConfig:
     auto_thresholds: bool = True
 
     selector: str = "quality_diversity"
-    selector_alpha: float = 0.45
-    selector_beta: float = 0.55
+    selector_alpha: float = 0.60
+    selector_beta: float = 0.40
     dpp_sigma: float = 0.5
 
     quality_weights: QualityWeights = field(default_factory=QualityWeights)

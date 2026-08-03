@@ -27,6 +27,7 @@ class VincentsMotionBlurFilter(VincentSoftFilter):
         self,
         softness: float = BLUR_SCORE_SOFTNESS,
         stroke_width: int = BLUR_STROKE_WIDTH,
+        hard_min_variance: float = 0.0,
         enabled=True,
     ):
 
@@ -34,6 +35,26 @@ class VincentsMotionBlurFilter(VincentSoftFilter):
 
         self.softness = softness
         self.stroke_width = stroke_width
+        self.hard_min_variance = hard_min_variance
+
+    def evaluate(self, observation):
+        """Compute the raw boundary-blur stat; hard-reject the blurred tail.
+
+        The soft filter normally never rejects, but a configurable absolute
+        floor on the boundary-band variance catches frames whose object
+        boundary is smeared by motion blur. The raw stat is always recorded so
+        downstream diagnostics and the population weight pass see it.
+        """
+        if not self.enabled:
+            return 1.0, True, ""
+
+        stat = float(self.compute_stat(observation))
+        setattr(observation.metrics, self.stat_attr, stat)
+
+        if self.hard_min_variance > 0.0 and stat < self.hard_min_variance:
+            return 0.0, False, "motion_blur"
+
+        return 1.0, True, ""
 
     def compute_stat(self, observation) -> float:
 
