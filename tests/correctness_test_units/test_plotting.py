@@ -33,19 +33,33 @@ class _MockObs:
         self.id = oid
         self.quality = quality
         self.metrics = _MockMetrics(**metrics_dict)
+        self.rejection_reason = None
+        self.image_path = None
+        self.mask_path = None
 
 
 def _make_mock_observations(embeddings, quality_scores, selected_idx):
     keys = ["laplacian", "tenengrad", "area_ratio", "border_ratio",
-            "hand_overlap", "completeness", "blur", "area", "occlusion",
-            "confidence"]
+            "edge_ratio", "hand_overlap", "completeness", "blur", "area",
+            "occlusion", "confidence",
+            "vincents_area", "vincents_artefacts", "vincents_motion_blur",
+            "vincent_area_fraction", "vincent_artifact_fraction",
+            "vincent_boundary_blur_variance"]
     accepted = []
     for i in range(len(embeddings)):
         d = {k: float(np.random.rand()) for k in keys}
+        # unbounded raw stats (not [0, 1])
+        d["laplacian"] = float(np.random.rand() * 500.0)
+        d["tenengrad"] = float(np.random.rand() * 100.0)
+        d["vincent_boundary_blur_variance"] = float(np.random.rand() * 10000.0)
         accepted.append(_MockObs(i, float(quality_scores[i]), d))
     sel_set = set(selected_idx)
     selected = [o for o in accepted if o.id in sel_set]
-    rejected = [_MockObs(1000 + i, 0.0, {k: 0.0 for k in keys}) for i in range(10)]
+    rejected = []
+    for i in range(10):
+        rej = _MockObs(1000 + i, 0.0, {k: 0.0 for k in keys})
+        rej.rejection_reason = "blur"
+        rejected.append(rej)
     return accepted, rejected, selected
 
 
@@ -341,6 +355,82 @@ def test_render_embedding_unknown_method():
         check(False, "should have raised ValueError")
     except ValueError:
         check(True, "unknown method raises ValueError")
+
+
+def test_feature_overview_plots_saved():
+    """Per-feature images land in data_set_overview/ and bad_examples/ folders."""
+    from plotting_process.wrapper import plot_all
+
+    with tempfile.TemporaryDirectory() as tmp:
+        out = Path(tmp)
+        embeddings, qs, sel_idx = _make_synthetic_data(40, 64, 5)
+        accepted, rejected, selected = _make_mock_observations(embeddings, qs, sel_idx)
+
+        plot_all(
+            accepted=accepted, rejected=rejected, selected=selected,
+            embeddings=embeddings, selected_idx=sel_idx, quality_scores=qs,
+            output_dir=out, debug=False, single_set_plots=False,
+        )
+
+        pre = out / "plots" / "pre-filter"
+        overview = pre / "data_set_overview"
+        bad = pre / "bad_examples"
+        check(overview.is_dir(), "data_set_overview/ exists")
+        check(bad.is_dir(), "bad_examples/ exists")
+
+        # one image per feature, prefixed raw_filter_ / quality_score_
+        for prefix in ["raw_filter_laplacian", "raw_filter_area_ratio",
+                        "raw_filter_vincent_boundary_blur_variance"]:
+            check((overview / f"{prefix}.png").exists(), f"data_set_overview/{prefix}.png saved")
+            check((bad / f"{prefix}.png").exists(), f"bad_examples/{prefix}.png saved")
+        for prefix in ["quality_score_blur", "quality_score_occlusion", "quality_score_score"]:
+            check((overview / f"{prefix}.png").exists(), f"data_set_overview/{prefix}.png saved")
+            check((bad / f"{prefix}.png").exists(), f"bad_examples/{prefix}.png saved")
+
+        # no legacy combined images
+        check(not (pre / "dataset_overview_raw.png").exists(), "no legacy dataset_overview_raw.png")
+        check(not (pre / "bad_examples_raw.png").exists(), "no legacy bad_examples_raw.png")
+
+        for f in list(overview.glob("*.png")) + list(bad.glob("*.png")):
+            check(f.stat().st_size > 1024, f"{f.name} has content")
+
+
+def test_dataset_overview_hist_xlim():
+    """Histogram x-axis is [-0.05, 1.05] for [0, 1]-bounded features only."""
+    from matplotlib import pyplot as plt
+    from plotting_process.feature_plots import _plot_metric_row, FIXED_HIST_XLIM
+
+    embeddings, qs, sel_idx = _make_synthetic_data(30, 8, 4)
+    accepted, rejected, selected = _make_mock_observations(embeddings, qs, sel_idx)
+
+    # 0-1 bounded feature (area_ratio) -> fixed xlim
+    fig, (ax_hist, ax_scatter) = plt.subplots(1, 2)
+    _plot_metric_row(ax_hist, ax_scatter, accepted, rejected, selected,
+                     "area_ratio", "Area Ratio", plt.cm.coolwarm)
+    lo, hi = ax_hist.get_xlim()
+    check(abs(lo - FIXED_HIST_XLIM[0]) < 1e-9, f"area_ratio lower xlim {lo}")
+    check(abs(hi - FIXED_HIST_XLIM[1]) < 1e-9, f"area_ratio upper xlim {hi}")
+    plt.close(fig)
+
+    # unbounded feature (laplacian variance) -> not fixed to [0, 1]
+    fig, (ax_hist, ax_scatter) = plt.subplots(1, 2)
+    _plot_metric_row(ax_hist, ax_scatter, accepted, rejected, selected,
+                     "laplacian", "Laplacian", plt.cm.coolwarm)
+    lo, hi = ax_hist.get_xlim()
+    check(hi > 1.05, f"laplacian upper xlim {hi} not clipped to [0, 1]")
+    plt.close(fig)
+
+
+def test_feature_plots_warm_cold_colormap():
+    """The feature plots use matplotlib's coolwarm (cold=low, warm=high)."""
+    from plotting_process.feature_plots import WARM_COLD_CMAP
+
+    cold = WARM_COLD_CMAP(0.0)
+    mid = WARM_COLD_CMAP(0.5)
+    warm = WARM_COLD_CMAP(1.0)
+    check(cold[2] > cold[0], "cold end is blue-dominant")
+    check(warm[0] > warm[2], "warm end is red-dominant")
+    check(abs(cold[0] - mid[0]) > 0.3, "cold and mid differ clearly")
 
 
 def test_3d_html_has_content():

@@ -48,7 +48,7 @@ All files are aligned by numeric stem. The `object_hands/` directory is optional
 
 ## Stage 1: Pre-Filtering
 
-The pre-filter runs a pipeline of 6 filters in a configurable order. All filters must pass for an observation to survive. Each filter returns `(score, passed, reason)`:
+The pre-filter runs a pipeline of **hard filters** in a configurable order, followed by a **soft pre-filter pass** that computes population-adapted weights. All hard filters must pass for an observation to survive. Each hard filter returns `(score, passed, reason)`:
 
 ```python
 score   ∈ [0, 1]    # pass/fail score
@@ -136,18 +136,50 @@ Measures how complete the visible object shape is using three geometric cues:
 
 **Decision:** reject if `score < minimum_score`
 
+### VincentEmptyMaskFilter (hard)
+
+Ported from `nit_view_selection/select_best_views.py`. Rejects observations whose mask contains no foreground pixels at all.
+
+**Metric:** `vincent_pixel_count = number of mask pixels > 0`
+
+**Decision:** reject if `pixel_count <= 0` (reason `vincent_empty_mask`)
+
+### VincentBorderPixelFilter (hard)
+
+Ported from `nit_view_selection/select_best_views.py`. Rejects objects whose mask touches the image frame.
+
+**Metric:** `vincent_touches_border` — true if any foreground pixel lies on the first/last row or column
+
+**Decision:** reject if the mask touches the frame (reason `vincent_border_pixel`)
+
+### Soft Pre-Filter Pass (population-adapted)
+
+Ported from `nit_view_selection/select_best_views.py`. The soft pre-filters never hard-reject. They compute a raw per-observation stat, then a **population pass** converts those stats into selection weights in **(0, 1]** using a robust median/MAD typical scale and a one-sided half-Gaussian falloff on the "bad" side:
+
+```
+weight = exp(-0.5 * (z / softness)^2),   z = (stat - median) / (MAD * 1.4826)
+```
+
+Raw stats are computed for all observations (accepted + rejected, for diagnostics); weights are fit only on the accepted set.
+
+- **VincentsAreaFilter** — `stat = vincent_area_fraction = mask_area / canvas_area`. Small masks are penalized (`low_bad`, `softness=0.3`). Weight stored as `vincents_area`.
+- **VincentsArtifactsFilter** — `stat = vincent_artifact_fraction = |open(mask) XOR close(mask)| / mask_pixels`. Speckled/holed/ragged masks are penalized (`high_bad`, `softness=3.0`, `kernel_size=3`). Weight stored as `vincents_artefacts`.
+- **VincentsMotionBlurFilter** — `stat = vincent_boundary_blur_variance` = variance of the Laplacian restricted to the boundary band (`dilate(mask) XOR erode(mask)`, `stroke_width=9`). Blurred boundaries are penalized (`low_bad`, `softness=0.3`). Weight stored as `vincents_motion_blur`.
+
 ### Filter Pipeline Order
 
-Defined in `FilterConfig.filter_order`. The default order is chosen for efficiency and specificity:
+Hard filters are defined in `FilterConfig.filter_order`. The default order is chosen for efficiency and specificity:
 
-1. **border** — cheap, catches truncation (ring contact + per-edge contact)
-2. **area** — cheap, rejects tiny masks
-3. **confidence** — cheap (disabled by default)
-4. **blur** — moderately expensive (requires image)
-5. **occlusion** — moderately expensive (requires hand mask)
-6. **completeness** — most expensive (requires contour finding)
+1. **vincent_empty_mask** — cheapest (mask pixel count)
+2. **vincent_border_pixel** — cheap (frame contact)
+3. **border** — catches truncation (ring contact + per-edge contact)
+4. **area** — cheap, rejects tiny masks
+5. **confidence** — cheap (disabled by default)
+6. **blur** — moderately expensive (requires image)
+7. **occlusion** — moderately expensive (requires hand mask)
+8. **completeness** — most expensive (requires contour finding)
 
-Early filters reject quickly, avoiding unnecessary computation.
+Early filters reject quickly, avoiding unnecessary computation. After the hard pass, the soft pre-filter pass runs on the accepted set.
 
 ---
 
@@ -158,7 +190,10 @@ Every observation that passes the pre-filter receives a **quality score** `Q ∈
 ### Weighted Scorer
 
 ```python
-Q = w_blur·S_blur + w_area·S_area + w_occlusion·S_occlusion + w_completeness·S_completeness
+Q = w_blur·S_blur + w_area·S_area + w_occlusion·S_occlusion
+  + w_completeness·S_completeness
+  + w_vincents_area·S_vincents_area + w_vincents_artefacts·S_vincents_artefacts
+  + w_vincents_motion_blur·S_vincents_motion_blur
 ```
 
 All weights are configured in `QualityWeights` and sum to 1.
@@ -170,14 +205,22 @@ All weights are configured in `QualityWeights` and sum to 1.
 | occlusion | 0.20 | Freedom from hand overlap |
 | area | 0.15 | Object size relative to image |
 | confidence | 0.10 | Detection confidence (computed post-hoc as weakest-link) |
+| vincents_area | 0.10 | Population-adapted mask area weight |
+| vincents_artefacts | 0.10 | Population-adapted mask artifact weight |
+| vincents_motion_blur | 0.10 | Population-adapted boundary blur weight |
 
 ### Per-Component Scores
 
-- **BlurQuality:** `min(laplacian / max_lap, 1.0)` where `max_lap = 2 × laplacian_threshold`. This spreads scores across the accepted sharpness range.
+- **BlurQuality:** `min(laplacian / max_lap, 1.0)` where `max_lap` is the fixed global anchor `quality_anchors.blur_max_lap` (default 400). This makes sharpness scores comparable across datasets.
 - **AreaQuality:** `min(area_ratio / 0.20, 1.0)`. Scores increase linearly up to 20% image coverage.
 - **OcclusionQuality:** `1.0 - hand_overlap`. Perfect occlusion gives 1.0, full occlusion gives 0.0.
 - **CompletenessQuality:** returns `observation.metrics.completeness` directly (already in [0,1]).
-- **Confidence** (post-hoc): computed as `min(blur, area, occlusion, completeness)` — the weakest-link across all quality dimensions.
+- **VincentsAreaQuality / VincentsArtifactsQuality / VincentsMotionBlurQuality:** anchored in fixed global max values (see `quality_anchors`) applied to the raw stats `vincent_area_fraction`, `vincent_artifact_fraction`, `vincent_boundary_blur_variance`. The population-adapted weights (`vincents_area`, `vincents_artefacts`, `vincents_motion_blur`) remain pre-filter/diagnostic outputs.
+- **Confidence** (post-hoc): computed as `min(blur, area, occlusion, completeness, vincents_area, vincents_artefacts, vincents_motion_blur)` — the weakest-link across all quality dimensions.
+
+### Quality Floor (Stage 4)
+
+After quality scoring, an adaptive floor (see `docs/scoring.md`) excludes the worst tail of the accepted pool from the **embedding selection pool**. Only observations with `quality >= floor` compete in the selector, so the selected set always meets a minimum quality. See `compute_quality_floor` in `run.py`.
 
 ### ObservationMetrics Dataclass
 
@@ -187,6 +230,9 @@ All computed values are stored on `observation.metrics`:
 laplacian, tenengrad, area_ratio, border_ratio, hand_overlap,
 solidity, extent, convexity, completeness,
 blur, area, occlusion, confidence,
+vincent_pixel_count, vincent_touches_border,
+vincent_area_fraction, vincent_artifact_fraction, vincent_boundary_blur_variance,
+vincents_area, vincents_artefacts, vincents_motion_blur,
 quality
 ```
 
@@ -297,7 +343,7 @@ From the pool of accepted observations with quality scores and embeddings, selec
 1. Start with the highest-quality observation.
 2. Greedily pick the observation maximizing the weighted sum of quality and diversity.
 
-**Parameters:** `selector_alpha` (quality weight, default 0.4), `selector_beta` (diversity weight, default 0.6).
+**Parameters:** `selector_alpha` (quality weight, default 0.45), `selector_beta` (diversity weight, default 0.55).
 
 **Use case:** balanced quality-diversity trade-off.
 
@@ -395,12 +441,22 @@ All pipeline parameters are defined in `config.py`.
 | | `border.edge_maximum_ratio` | 0.25 | Maximum fraction of mask pinned to a frame edge |
 | | `occlusion.maximum_overlap` | 0.15 | Maximum hand overlap ratio |
 | | `completeness.minimum_score` | 0.65 | Minimum completeness score |
-| | `filter_order` | `[border, area, confidence, blur, occlusion, completeness]` | Pipeline execution order |
+| | `vincent_empty_mask.enabled` | `True` | Enable empty-mask hard filter |
+| | `vincent_border_pixel.enabled` | `True` | Enable border-pixel hard filter |
+| | `vincents_area.softness` | 0.3 | Area weight falloff (robust-MADs) |
+| | `vincents_artefacts.softness` | 3.0 | Artifact weight falloff (robust-MADs) |
+| | `vincents_artefacts.kernel_size` | 3 | Morphology kernel for artifact detection |
+| | `vincents_motion_blur.softness` | 0.3 | Boundary-blur weight falloff (robust-MADs) |
+| | `vincents_motion_blur.stroke_width` | 9 | Boundary-band stroke width |
+| | `filter_order` | `[vincent_empty_mask, vincent_border_pixel, border, area, confidence, blur, occlusion, completeness]` | Hard-pipeline execution order |
 | **Quality** | `quality_weights.blur` | 0.20 | Blur quality weight |
 | | `quality_weights.area` | 0.15 | Area quality weight |
 | | `quality_weights.occlusion` | 0.20 | Occlusion quality weight |
 | | `quality_weights.completeness` | 0.35 | Completeness quality weight |
 | | `quality_weights.confidence` | 0.10 | Confidence quality weight |
+| | `quality_weights.vincents_area` | 0.10 | Mask-area population weight |
+| | `quality_weights.vincents_artefacts` | 0.10 | Mask-artifact population weight |
+| | `quality_weights.vincents_motion_blur` | 0.10 | Boundary-blur population weight |
 | **Embedding** | `embedding` | `auto` | Type (inferred from model name) |
 | | `embedding_model` | `facebook/dinov3-vitb16-pretrain-lvd1689m` | Model HF ID or path |
 | | `use_shape_descriptors` | `False` | Use CPU-based shape descriptors |

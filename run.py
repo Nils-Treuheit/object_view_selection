@@ -15,11 +15,21 @@ from preprocessing.completeness_filter import CompletenessFilter
 from preprocessing.confidence import ConfidenceFilter
 from preprocessing.filter_pipeline import FilterPipeline
 from preprocessing.occlusion_filter import OcclusionFilter
+from preprocessing.vincent_border_pixel import VincentBorderPixelFilter
+from preprocessing.vincent_empty_mask import VincentEmptyMaskFilter
+from preprocessing.vincents_area_filter import VincentsAreaFilter
+from preprocessing.vincents_artefacts import VincentsArtifactsFilter
+from preprocessing.vincents_motion_blur import VincentsMotionBlurFilter
 from quality.area import AreaQuality
 from quality.blur import BlurQuality
 from quality.completeness import CompletenessQuality
 from quality.occlusion import OcclusionQuality
 from quality.quality_scorer import QualityScorer
+from quality.vincent import (
+    VincentsAreaQuality,
+    VincentsArtifactsQuality,
+    VincentsMotionBlurQuality,
+)
 
 
 def build_filters(cfg: PipelineConfig, tuned=None):
@@ -53,6 +63,12 @@ def build_filters(cfg: PipelineConfig, tuned=None):
             minimum_score=tuned.get("completeness_minimum_score", cfg.filters.completeness.minimum_score),
             enabled=cfg.filters.completeness.enabled,
         ),
+        "vincent_empty_mask": VincentEmptyMaskFilter(
+            enabled=cfg.filters.vincent_empty_mask.enabled,
+        ),
+        "vincent_border_pixel": VincentBorderPixelFilter(
+            enabled=cfg.filters.vincent_border_pixel.enabled,
+        ),
     }
     filters = []
     for name in cfg.filters.filter_order:
@@ -61,14 +77,52 @@ def build_filters(cfg: PipelineConfig, tuned=None):
     return FilterPipeline(filters)
 
 
+def build_soft_filters(cfg: PipelineConfig):
+    """Population-adapted soft pre-filters (ported from nit_view_selection).
+
+    These never hard-reject: they compute raw per-observation stats and then a
+    population pass turns those stats into robust selection weights in (0, 1].
+    """
+    return {
+        "vincents_area": VincentsAreaFilter(
+            softness=cfg.filters.vincents_area.softness,
+            enabled=cfg.filters.vincents_area.enabled,
+        ),
+        "vincents_artefacts": VincentsArtifactsFilter(
+            softness=cfg.filters.vincents_artefacts.softness,
+            kernel_size=cfg.filters.vincents_artefacts.kernel_size,
+            enabled=cfg.filters.vincents_artefacts.enabled,
+        ),
+        "vincents_motion_blur": VincentsMotionBlurFilter(
+            softness=cfg.filters.vincents_motion_blur.softness,
+            stroke_width=cfg.filters.vincents_motion_blur.stroke_width,
+            enabled=cfg.filters.vincents_motion_blur.enabled,
+        ),
+    }
+
+
+def apply_soft_filters(soft_filters, accepted, rejected=None):
+    """Run soft pre-filter pass: raw stats per observation, then population weights.
+
+    Raw stats are computed for all observations (accepted + rejected) so the
+    diagnostic plots can compare them; population weights are fit only on the
+    accepted set (rejected observations do not compete for selection).
+    """
+    all_observations = list(accepted) + list(rejected or [])
+    for soft_filter in soft_filters.values():
+        for obs in all_observations:
+            soft_filter.evaluate(obs)
+        soft_filter.fit_weights(accepted)
+
+
 def build_quality_scorer(cfg: PipelineConfig, tuned=None):
     if tuned is None:
         tuned = {}
     metrics = []
     weights = {}
+    anchors = cfg.quality_anchors
     if cfg.filters.blur.enabled:
-        lap_thresh = tuned.get("laplacian_threshold", cfg.filters.blur.threshold)
-        metrics.append(BlurQuality(max_lap=lap_thresh * 2))
+        metrics.append(BlurQuality(max_lap=anchors.blur_max_lap))
         weights["blur"] = cfg.quality_weights.blur
     if cfg.filters.area.enabled:
         metrics.append(AreaQuality())
@@ -79,6 +133,15 @@ def build_quality_scorer(cfg: PipelineConfig, tuned=None):
     if cfg.filters.completeness.enabled:
         metrics.append(CompletenessQuality())
         weights["completeness"] = cfg.quality_weights.completeness
+    if cfg.filters.vincents_area.enabled:
+        metrics.append(VincentsAreaQuality(max_fraction=anchors.vincents_area_max_fraction))
+        weights["vincents_area"] = cfg.quality_weights.vincents_area
+    if cfg.filters.vincents_artefacts.enabled:
+        metrics.append(VincentsArtifactsQuality(max_fraction=anchors.vincents_artifacts_max_fraction))
+        weights["vincents_artefacts"] = cfg.quality_weights.vincents_artefacts
+    if cfg.filters.vincents_motion_blur.enabled:
+        metrics.append(VincentsMotionBlurQuality(max_variance=anchors.vincents_motion_blur_max_variance))
+        weights["vincents_motion_blur"] = cfg.quality_weights.vincents_motion_blur
     return QualityScorer(metrics, weights)
 
 
@@ -185,6 +248,44 @@ def build_selector(cfg: PipelineConfig):
         raise ValueError(f"Unknown selector: {name}")
 
 
+def compute_quality_floor(quality_scores, num_views: int, cfg) -> float:
+    """Adaptive minimum-quality floor for the embedding selection pool.
+
+    Drops the worst tail of the accepted pool so low-quality samples are
+    excluded from the selection set, while guaranteeing enough candidates
+    remain for a diverse sample-set selection:
+
+    - ``quality_floor.percentile``: drop the bottom ``percentile`` of the pool.
+    - ``quality_floor.minimum_pool``: never leave fewer than this many
+      candidates (unless the pool itself is smaller).
+    - ``quality_floor.absolute_min``: never let samples below this absolute
+      quality into the selection pool.
+    - the floor never drops the pool below ``num_views`` candidates.
+    """
+    scores = np.asarray(quality_scores, dtype=float)
+    n = len(scores)
+    if n == 0:
+        return 0.0
+    sorted_q = np.sort(scores)
+    if num_views >= n:
+        return float(sorted_q[0])
+
+    # target tail drop: reject the bottom `percentile`, plus the absolute min
+    floor = max(
+        float(np.quantile(scores, cfg.quality_floor.percentile)),
+        cfg.quality_floor.absolute_min,
+    )
+
+    # guarantee at least minimum_pool candidates survive: cap the floor
+    min_pool = max(cfg.quality_floor.minimum_pool, num_views)
+    if n >= min_pool:
+        floor = min(floor, float(sorted_q[-min_pool]))
+
+    # never drop the pool below num_views candidates
+    floor = min(floor, float(sorted_q[-num_views]))
+    return float(floor)
+
+
 def run_pipeline(cfg: PipelineConfig):
     output_dir = Path(cfg.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -213,6 +314,7 @@ def run_pipeline(cfg: PipelineConfig):
 
     filter_pipeline = build_filters(cfg, tuned)
     quality_scorer = build_quality_scorer(cfg, tuned)
+    soft_filters = build_soft_filters(cfg)
     embedding_model = build_embedding_model(cfg)
     selector = build_selector(cfg)
 
@@ -227,6 +329,8 @@ def run_pipeline(cfg: PipelineConfig):
 
     print(f"Accepted: {len(accepted)}, Rejected: {len(rejected)}")
 
+    apply_soft_filters(soft_filters, accepted, rejected)
+
     if cfg.debug:
         rejection_counts = {}
         for obs in rejected:
@@ -236,7 +340,8 @@ def run_pipeline(cfg: PipelineConfig):
         for reason, count in sorted(rejection_counts.items(), key=lambda x: -x[1]):
             print(f"    {reason}: {count}")
         if accepted:
-            raw_metrics = ["laplacian", "tenengrad", "area_ratio", "border_ratio", "edge_ratio", "hand_overlap", "completeness"]
+            raw_metrics = ["laplacian", "tenengrad", "area_ratio", "border_ratio", "edge_ratio", "hand_overlap", "completeness",
+                           "vincent_area_fraction", "vincent_artifact_fraction", "vincent_boundary_blur_variance"]
             print("  Accepted raw metrics:")
             for key in raw_metrics:
                 vals = np.array([getattr(o.metrics, key, 0) for o in accepted])
@@ -255,10 +360,15 @@ def run_pipeline(cfg: PipelineConfig):
             obs.metrics.area,
             obs.metrics.occlusion,
             obs.metrics.completeness,
+            obs.metrics.vincents_area,
+            obs.metrics.vincents_artefacts,
+            obs.metrics.vincents_motion_blur,
         )
 
     if cfg.debug:
-        quality_keys = ["blur", "area", "occlusion", "completeness", "confidence"]
+        quality_keys = ["blur", "area", "occlusion", "completeness",
+                        "vincents_area", "vincents_artefacts", "vincents_motion_blur",
+                        "confidence"]
         print("  Quality scores:")
         for key in quality_keys:
             vals = np.array([getattr(o.metrics, key, 0) for o in accepted])
@@ -266,32 +376,48 @@ def run_pipeline(cfg: PipelineConfig):
         qvals = np.array([o.quality for o in accepted])
         print(f"    score:  min={qvals.min():.4f}  max={qvals.max():.4f}  mean={qvals.mean():.4f}  median={np.median(qvals):.4f}")
 
+    quality_scores = np.array([obs.quality for obs in accepted])
+
+    pool = accepted
+    floor = 0.0
+    if cfg.quality_floor.enabled:
+        floor = compute_quality_floor(quality_scores, cfg.num_views, cfg)
+        if floor > 0.0:
+            pool_mask = quality_scores >= floor
+            pool = [obs for obs, keep in zip(accepted, pool_mask) if keep]
+            print(f"Quality floor {floor:.3f}: selection pool {len(pool)} of {len(accepted)}")
+
+    if len(pool) == 0:
+        print("No observations above the quality floor. Exiting.")
+        return
+
     if cfg.use_shape_descriptors or embedding_model is None:
-        for obs in tqdm(accepted, desc="Extracting descriptors"):
+        for obs in tqdm(pool, desc="Extracting descriptors"):
             feat = extract_shape_descriptor(obs, cfg.shape_descriptor)
             obs.embedding = feat
     else:
-        for obs in tqdm(accepted, desc="Extracting embeddings"):
+        for obs in tqdm(pool, desc="Extracting embeddings"):
             obs.embedding = embedding_model.encode(obs.image, obs.mask)
 
-    embeddings = np.array([obs.embedding for obs in accepted])
-    quality_scores = np.array([obs.quality for obs in accepted])
+    embeddings = np.array([obs.embedding for obs in pool])
+    pool_quality = np.array([obs.quality for obs in pool])
 
     selected_idx = selector.select(
         embeddings=embeddings,
-        quality_scores=quality_scores,
+        quality_scores=pool_quality,
         n=cfg.num_views,
     )
 
-    selected = [accepted[i] for i in selected_idx]
+    selected = [pool[i] for i in selected_idx]
     print(f"Selected {len(selected)} views")
 
     if cfg.debug:
-        sel_qual = quality_scores[selected_idx]
+        sel_qual = pool_quality[selected_idx]
         print(f"  Selected quality: min={sel_qual.min():.4f}  max={sel_qual.max():.4f}  mean={sel_qual.mean():.4f}")
-        print(f"  Pool quality:     min={quality_scores.min():.4f}  max={quality_scores.max():.4f}  mean={quality_scores.mean():.4f}")
+        print(f"  Pool quality:     min={pool_quality.min():.4f}  max={pool_quality.max():.4f}  mean={pool_quality.mean():.4f}")
 
     selected_set = {s.id for s in selected}
+    pool_set = {obs.id for obs in pool}
 
     quality_csv = []
     for i, obs in enumerate(accepted):
@@ -299,6 +425,8 @@ def run_pipeline(cfg: PipelineConfig):
             "id": obs.id,
             "quality": obs.quality,
             "score": obs.quality,
+            "in_selection_pool": obs.id in pool_set,
+            "below_quality_floor": obs.id not in pool_set,
             "laplacian": obs.metrics.laplacian,
             "tenengrad": obs.metrics.tenengrad,
             "area_ratio": obs.metrics.area_ratio,
@@ -314,6 +442,12 @@ def run_pipeline(cfg: PipelineConfig):
             "area": obs.metrics.area,
             "occlusion": obs.metrics.occlusion,
             "confidence": obs.metrics.confidence,
+            "vincent_area_fraction": obs.metrics.vincent_area_fraction,
+            "vincent_artifact_fraction": obs.metrics.vincent_artifact_fraction,
+            "vincent_boundary_blur_variance": obs.metrics.vincent_boundary_blur_variance,
+            "vincents_area": obs.metrics.vincents_area,
+            "vincents_artefacts": obs.metrics.vincents_artefacts,
+            "vincents_motion_blur": obs.metrics.vincents_motion_blur,
             "selected": obs.id in selected_set,
         }
         quality_csv.append(row)
@@ -325,6 +459,7 @@ def run_pipeline(cfg: PipelineConfig):
     if cfg.save_embeddings:
         np.save(output_dir / "embeddings.npy", embeddings)
         np.save(output_dir / "selected_indices.npy", selected_idx)
+        np.save(output_dir / "selection_pool_ids.npy", np.array([obs.id for obs in pool]))
 
     for obs in selected:
         stem = f"{obs.id:05d}"
@@ -360,6 +495,11 @@ def run_pipeline(cfg: PipelineConfig):
             "edge_ratio": m.edge_ratio,
             "hand_overlap": m.hand_overlap,
             "completeness": m.completeness,
+            "vincent_pixel_count": m.vincent_pixel_count,
+            "vincent_touches_border": m.vincent_touches_border,
+            "vincent_area_fraction": m.vincent_area_fraction,
+            "vincent_artifact_fraction": m.vincent_artifact_fraction,
+            "vincent_boundary_blur_variance": m.vincent_boundary_blur_variance,
         })
     pd.DataFrame(rejected_metrics_csv).to_csv(output_dir / "rejected_metrics.csv", index=False)
 
@@ -373,7 +513,7 @@ def run_pipeline(cfg: PipelineConfig):
     sel_dist = dist[np.ix_(selected_idx, selected_idx)]
     n_sel = len(selected_idx)
     triu_sel = sel_dist[np.triu_indices(n_sel, k=1)]
-    sel_qual = quality_scores[selected_idx]
+    sel_qual = pool_quality[selected_idx]
 
     non_sel_mask = np.ones(len(embeddings), dtype=bool)
     non_sel_mask[selected_idx] = False
@@ -382,32 +522,30 @@ def run_pipeline(cfg: PipelineConfig):
 
     selection_log = []
     if cfg.selector == "quality_diversity":
-        from selection.greedy_quality_diversity import GreedyQualityDiversity
-        s = GreedyQualityDiversity(alpha=cfg.selector_alpha, beta=cfg.selector_beta)
         steps = []
-        pool = set(range(len(embeddings)))
-        first = int(quality_scores.argmax())
+        remaining = set(range(len(embeddings)))
+        first = int(pool_quality.argmax())
         steps.append(first)
         selection_log.append({
-            "step": 0, "id": int(accepted[first].id),
-            "quality": float(quality_scores[first]),
+            "step": 0, "id": int(pool[first].id),
+            "quality": float(pool_quality[first]),
             "min_cosine_dist_to_set": None, "score": None,
         })
-        pool.remove(first)
+        remaining.remove(first)
         while len(steps) < len(selected_idx):
             best_score = -np.inf
             best_i = -1
-            for i in pool:
+            for i in remaining:
                 diversity = dist[i, steps].min()
-                score = cfg.selector_alpha * quality_scores[i] + cfg.selector_beta * diversity
+                score = cfg.selector_alpha * pool_quality[i] + cfg.selector_beta * diversity
                 if score > best_score:
                     best_score = score
                     best_i = i
             steps.append(best_i)
-            pool.remove(best_i)
+            remaining.remove(best_i)
             selection_log.append({
-                "step": len(steps)-1, "id": int(accepted[best_i].id),
-                "quality": float(quality_scores[best_i]),
+                "step": len(steps)-1, "id": int(pool[best_i].id),
+                "quality": float(pool_quality[best_i]),
                 "min_cosine_dist_to_set": float(dist[best_i, steps[:-1]].min()),
                 "score": float(best_score),
             })
@@ -426,7 +564,10 @@ def run_pipeline(cfg: PipelineConfig):
             "selected_mean": float(sel_qual.mean()),
             "selected_min": float(sel_qual.min()),
             "selected_max": float(sel_qual.max()),
-            "pool_mean": float(quality_scores.mean()),
+            "pool_mean": float(pool_quality.mean()),
+            "pool_min": float(pool_quality.min()),
+            "quality_floor": float(floor),
+            "selection_pool_count": int(len(pool)),
         },
         "coverage": {
             "mean_min_cosine_dist_to_selected": float(coverage_dists.mean()) if len(coverage_dists) > 0 else 0.0,
@@ -447,7 +588,11 @@ def run_pipeline(cfg: PipelineConfig):
         "embedding": effective_embedding,
         "embedding_model": cfg.embedding_model,
         "selector": cfg.selector,
+        "quality_floor": float(floor),
+        "selection_pool_count": len(pool),
+        "data_root": str(cfg.data_root),
         "accepted_ids": [obs.id for obs in accepted],
+        "selection_pool_ids": [obs.id for obs in pool],
         "selected_ids": [obs.id for obs in selected],
         "rejected_ids": [obs.id for obs in rejected],
         "selection_metrics": selection_metrics,
@@ -472,7 +617,7 @@ def run_pipeline(cfg: PipelineConfig):
     if cfg.save_plots:
         try:
             from utils.plotting import plot_all
-            plot_all(accepted, rejected, selected, embeddings, selected_idx, quality_scores, output_dir, single_set_plots=cfg.debug, debug=cfg.debug)
+            plot_all(accepted, rejected, selected, embeddings, selected_idx, pool_quality, output_dir, single_set_plots=cfg.debug, debug=cfg.debug)
         except Exception as e:
             print(f"Plotting failed: {e}")
 

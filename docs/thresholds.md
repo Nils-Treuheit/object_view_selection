@@ -66,16 +66,18 @@ Used when `auto_thresholds: false` or when a tuned value is not provided.
 
 ## Filter Pipeline Order
 
-Defined in `FilterConfig.filter_order`:
+Defined in `FilterConfig.filter_order` (hard filters):
 
-1. **Border** — truncation by image edge
-2. **Area** — object too small
-3. **Confidence** — detection confidence too low (disabled by default)
-4. **Blur** — image too blurry
-5. **Occlusion** — hand/object overlap too high
-6. **Completeness** — object mask incomplete
+1. **VincentEmptyMask** — mask has no foreground pixels
+2. **VincentBorderPixel** — mask touches the image frame
+3. **Border** — truncation by image edge
+4. **Area** — object too small
+5. **Confidence** — detection confidence too low (disabled by default)
+6. **Blur** — image too blurry
+7. **Occlusion** — hand/object overlap too high
+8. **Completeness** — object mask incomplete
 
-Filters early in the pipeline reject cheaply before more expensive checks.
+Filters early in the pipeline reject cheaply before more expensive checks. After the hard pass, the population-adapted **soft pre-filter pass** (`VincentsAreaFilter`, `VincentsArtifactsFilter`, `VincentsMotionBlurFilter`) computes (0, 1] weights from robust median/MAD stats — these never reject, they feed quality scoring.
 
 ---
 
@@ -121,3 +123,8 @@ Not thresholds but affect final ranking. Defined in `QualityWeights`:
 | `occlusion` | `0.20` | Freedom from hand occlusion |
 | `area` | `0.15` | Object size relative to image |
 | `confidence` | `0.10` | Detection confidence |
+| `vincents_area` | `0.10` | Population-adapted mask area weight |
+| `vincents_artefacts` | `0.10` | Population-adapted mask artifact weight |
+| `vincents_motion_blur` | `0.10` | Population-adapted boundary blur weight |
+
+The Vincent soft-filter softness values (`VincentsAreaConfig.softness`, `VincentsArtifactsConfig.softness`, `VincentsMotionBlurConfig.softness`) control the falloff steepness in robust-MADs: smaller softness → sharper discrimination around the population typical value.

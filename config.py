@@ -40,6 +40,36 @@ class CompletenessConfig:
 
 
 @dataclass
+class VincentEmptyMaskConfig:
+    enabled: bool = True
+
+
+@dataclass
+class VincentBorderPixelConfig:
+    enabled: bool = True
+
+
+@dataclass
+class VincentsAreaConfig:
+    enabled: bool = True
+    softness: float = 0.3
+
+
+@dataclass
+class VincentsArtifactsConfig:
+    enabled: bool = True
+    softness: float = 3.0
+    kernel_size: int = 3
+
+
+@dataclass
+class VincentsMotionBlurConfig:
+    enabled: bool = True
+    softness: float = 0.3
+    stroke_width: int = 9
+
+
+@dataclass
 class FilterConfig:
     blur: BlurConfig = field(default_factory=BlurConfig)
     area: AreaConfig = field(default_factory=AreaConfig)
@@ -47,7 +77,13 @@ class FilterConfig:
     occlusion: OcclusionConfig = field(default_factory=OcclusionConfig)
     confidence: ConfidenceConfig = field(default_factory=ConfidenceConfig)
     completeness: CompletenessConfig = field(default_factory=CompletenessConfig)
+    vincent_empty_mask: VincentEmptyMaskConfig = field(default_factory=VincentEmptyMaskConfig)
+    vincent_border_pixel: VincentBorderPixelConfig = field(default_factory=VincentBorderPixelConfig)
+    vincents_area: VincentsAreaConfig = field(default_factory=VincentsAreaConfig)
+    vincents_artefacts: VincentsArtifactsConfig = field(default_factory=VincentsArtifactsConfig)
+    vincents_motion_blur: VincentsMotionBlurConfig = field(default_factory=VincentsMotionBlurConfig)
     filter_order: list = field(default_factory=lambda: [
+        "vincent_empty_mask", "vincent_border_pixel",
         "border", "area", "confidence", "blur", "occlusion", "completeness"
     ])
 
@@ -59,6 +95,40 @@ class QualityWeights:
     occlusion: float = 0.20
     confidence: float = 0.10
     completeness: float = 0.35
+    vincents_area: float = 0.10
+    vincents_artefacts: float = 0.10
+    vincents_motion_blur: float = 0.10
+
+
+@dataclass
+class QualityAnchors:
+    """Fixed, dataset-independent scales that map raw quality stats to [0, 1].
+
+    Pre-filter criteria stay population-relative (median/MAD, percentiles);
+    quality scoring uses these global anchors so scores are comparable
+    across datasets.
+    """
+
+    blur_max_lap: float = 400.0
+    vincents_area_max_fraction: float = 0.20
+    vincents_artifacts_max_fraction: float = 0.05
+    vincents_motion_blur_max_variance: float = 10000.0
+
+
+@dataclass
+class QualityFloorConfig:
+    """Adaptive minimum-quality floor applied before embedding selection.
+
+    The floor drops the worst tail of the accepted pool so that low-quality
+    samples are excluded from (or extremely unlikely to enter) the final
+    selection set, while guaranteeing enough candidates remain for a diverse
+    sample-set selection.
+    """
+
+    enabled: bool = True
+    percentile: float = 0.10
+    minimum_pool: int = 20
+    absolute_min: float = 0.5
 
 
 @dataclass
@@ -77,11 +147,13 @@ class PipelineConfig:
     auto_thresholds: bool = True
 
     selector: str = "quality_diversity"
-    selector_alpha: float = 0.4
-    selector_beta: float = 0.6
+    selector_alpha: float = 0.45
+    selector_beta: float = 0.55
     dpp_sigma: float = 0.5
 
     quality_weights: QualityWeights = field(default_factory=QualityWeights)
+    quality_anchors: QualityAnchors = field(default_factory=QualityAnchors)
+    quality_floor: QualityFloorConfig = field(default_factory=QualityFloorConfig)
 
     save_visualization: bool = True
     save_rejected: bool = True

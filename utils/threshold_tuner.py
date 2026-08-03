@@ -64,7 +64,7 @@ DEFAULT_PERCENTILES = dict(
 
 SAFETY_LIMITS = dict(
     area_minimum_ratio=dict(min=0.01, max=0.05),
-    #border_maximum_ratio=dict(min=0.001, max=0.05),
+    border_maximum_ratio=dict(min=0.001, max=0.05),
     laplacian_threshold=dict(min=5.0, max=200.0),
     tenengrad_threshold=dict(min=3.0, max=60.0),
     border_edge_maximum_ratio=dict(min=0.05, max=0.5),

@@ -19,19 +19,20 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 
-PASS = 0
-FAIL = 0
-
-
 def run_tests_in_module(module_name):
-    global PASS, FAIL
+    """Run every test_* function in a module.
+
+    Returns (function_pass, function_fail) for the module. Per-function
+    check()-assertion results are printed on failure.
+    """
+
+    from tests.test_utils import get_results
 
     try:
         mod = importlib.import_module(module_name)
     except Exception as e:
-        FAIL += 1
         print(f"\n  [ERROR] Could not import {module_name}: {e}")
-        return
+        return 0, 1
 
     test_fns = [
         getattr(mod, attr)
@@ -42,24 +43,35 @@ def run_tests_in_module(module_name):
 
     if not test_fns:
         print(f"\n  [WARNING] No test_* functions found in {module_name}")
-        return
+        return 0, 0
 
+    fn_pass = 0
+    fn_fail = 0
     for fn in test_fns:
+        before_pass, before_fail = get_results()
         try:
             fn()
+            fn_pass += 1
         except AssertionError as e:
-            FAIL += 1
+            fn_fail += 1
             print(f"  [FAIL] {module_name}.{fn.__name__}")
             if str(e):
                 print(f"          {e}")
         except Exception as e:
-            FAIL += 1
+            fn_fail += 1
             print(f"  [ERROR] {module_name}.{fn.__name__}: {e}")
             traceback.print_exc()
+        after_pass, after_fail = get_results()
+        if after_fail - before_fail:
+            print(
+                f"  [FAIL] {module_name}.{fn.__name__}: "
+                f"{after_fail - before_fail} check(s) failed"
+            )
+    return fn_pass, fn_fail
 
 
 def main():
-    from tests.test_utils import PASS, FAIL, reset_results, get_results
+    from tests.test_utils import reset_results, get_results
 
     reset_results()
 
@@ -69,6 +81,7 @@ def main():
 
     modules = [
         "tests.correctness_test_units.test_filters",
+        "tests.correctness_test_units.test_vincent_filters",
         "tests.correctness_test_units.test_descriptors_invariants",
         "tests.correctness_test_units.test_descriptors_shape",
         "tests.correctness_test_units.test_quality",
@@ -78,21 +91,30 @@ def main():
         "tests.correctness_test_units.test_crops",
         "tests.correctness_test_units.test_metrics",
         "tests.correctness_test_units.test_plotting",
+        "tests.correctness_test_units.test_quality_floor",
         "tests.correctness_test_units.test_selection_algorithms",
     ]
 
+    total_fn_pass = 0
+    total_fn_fail = 0
     for mod_name in modules:
         label = mod_name.rsplit(".", 1)[-1].replace("test_", "").replace("_", " ").title()
         print(f"\n--- {label} ---")
-        run_tests_in_module(mod_name)
+        p, f = run_tests_in_module(mod_name)
+        total_fn_pass += p
+        total_fn_fail += f
 
-    p, f = get_results()
+    check_pass, check_fail = get_results()
 
     print(f"\n{'=' * 70}")
-    print(f"  Results: {p} passed, {f} failed out of {p + f}")
+    print(
+        f"  Results: {total_fn_pass} test functions passed, "
+        f"{total_fn_fail} failed out of {total_fn_pass + total_fn_fail}"
+    )
+    print(f"  Check assertions: {check_pass} passed, {check_fail} failed")
     print(f"{'=' * 70}")
 
-    return 0 if f == 0 else 1
+    return 0 if (total_fn_fail == 0 and check_fail == 0) else 1
 
 
 if __name__ == "__main__":

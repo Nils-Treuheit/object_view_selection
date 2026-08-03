@@ -9,8 +9,8 @@ Dataset → Auto-Threshold → Pre-Filter → Quality Score → Embeddings → S
 | Stage | What it does |
 |-------|-------------|
 | **Auto-Threshold** | Computes data-driven filter thresholds from dataset statistics (percentile + safety clamp) |
-| **Pre-filter** | Rejects blurry, truncated, occluded, tiny, or incomplete observations (6 filter modules) |
-| **Quality Score** | Weighted combination of blur, area, occlusion, completeness scores |
+| **Pre-filter** | Rejects blurry, truncated, occluded, tiny, or incomplete observations (hard filters + population-adapted soft pass) |
+| **Quality Score** | Weighted combination of blur, area, occlusion, completeness + Vincent soft-filter weights |
 | **Embeddings** | DINOv3 / DINOv2 / SigLIP / CLIP / EVA-CLIP features (or classical shape descriptors on CPU) |
 | **Selection** | Greedy quality+diversity, FPS, Facility Location, DPP, or NBV |
 
@@ -149,6 +149,8 @@ outputs/
     ├── pre-filter/
     │   ├── violin_rejected_vs_accepted.png
     │   ├── violin_rejected_vs_accepted_scaled.png
+    │   ├── pre_filter_raw_stats.png       # All pre-filter elements (accepted vs rejected)
+    │   ├── pre_filter_soft_weights.png    # Vincent soft-filter population weights
     │   └── rejection_reasons.png
     │
     └── selection/
@@ -170,9 +172,21 @@ outputs/
 
 All pipeline parameters are controlled via `config.py`. See [`docs/thresholds.md`](docs/thresholds.md) for the auto-tuning strategy and [`docs/pipeline.md`](docs/pipeline.md) for full module documentation.
 
+### Pre-Filtering (Vincent migration)
+
+The pre-filter now includes the Vincent hard filters and a population-adapted soft pass (ported from `nit_view_selection/select_best_views.py`):
+
+- **Hard filters** (reject): `VincentEmptyMaskFilter` (empty masks), `VincentBorderPixelFilter` (masks touching the image frame). They run first in `FilterConfig.filter_order`.
+- **Soft filters** (never reject; produce `(0, 1]` weights fit on the accepted population via robust median/MAD stats):
+  - `VincentsAreaFilter` → `vincents_area` (penalizes small masks)
+  - `VincentsArtifactsFilter` → `vincents_artefacts` (penalizes speckle/holes/ragged edges)
+  - `VincentsMotionBlurFilter` → `vincents_motion_blur` (penalizes blurred object boundaries)
+
+Their raw stats and weights are exported to `quality.csv` (`vincent_*` / `vincents_*` columns) and fed into the quality score through `QualityWeights` (`vincents_area`, `vincents_artefacts`, `vincents_motion_blur`, default `0.10` each). Softness values (`VincentsAreaConfig`, `VincentsArtifactsConfig`, `VincentsMotionBlurConfig`) control the falloff steepness in robust-MADs.
+
 ## Testing
 
-The project has **101 correctness tests** (86 original + 15 plotting) and **51 smoke tests**.
+The project has **273 correctness tests** and **51 smoke tests** (including the Vincent hard/soft pre-filters, robust population scoring, and run.py wiring).
 
 ### Correctness Tests
 
@@ -180,10 +194,12 @@ Each filter, module, and selector is validated against **synthetic data** with k
 outputs — no external labeled dataset needed:
 
 ```bash
-# Run all correctness tests
+# Run all correctness tests (delegates to tests/run_correctness.py)
+python test_correctness.py
+# or
 python tests/run_correctness.py
 
-# Expected output: 101 passed, 0 failed out of 101
+# Expected output: Results: 273 passed, 0 failed out of 273
 ```
 
 ### Smoke Tests
@@ -191,8 +207,14 @@ python tests/run_correctness.py
 Run the full pipeline against a real dataset to verify end-to-end integration:
 
 ```bash
+python test_smoke.py --data_root /path/to/bottle
+# or
 python tests/run_smoke.py --data_root /path/to/bottle
+
+# Expected output: Results: 51 passed, 0 failed out of 51
 ```
+
+All suites must pass with **0 failures** before changes are considered complete.
 
 ## Project Structure
 
@@ -214,7 +236,14 @@ object_view_selection/
 │   ├── border_truncation.py  # Edge-touching detection
 │   ├── occlusion_filter.py   # Hand/mask overlap
 │   ├── confidence.py         # Detector confidence gate (disabled by default)
-│   └── completeness_filter.py# Solidity, extent, convexity
+│   ├── completeness_filter.py# Solidity, extent, convexity
+│   ├── vincent_utils.py      # Vincent helpers (boundary band, artifacts, robust scoring)
+│   ├── vincent_empty_mask.py # Hard: reject empty masks
+│   ├── vincent_border_pixel.py  # Hard: reject masks touching the frame
+│   ├── vincents_base.py      # Abstract VincentSoftFilter (population-adapted)
+│   ├── vincents_area_filter.py   # Soft: mask area weight
+│   ├── vincents_artefacts.py     # Soft: mask artifact weight
+│   └── vincents_motion_blur.py   # Soft: boundary-blur weight
 │
 ├── quality/
 │   ├── base.py               # Abstract QualityMetric
@@ -223,7 +252,8 @@ object_view_selection/
 │   ├── area.py               # AreaQuality (ratio up to 20%)
 │   ├── occlusion.py          # OcclusionQuality (1 - overlap)
 │   ├── completeness.py       # CompletenessQuality (pass-through)
-│   └── confidence.py         # ConfidenceQuality (pass-through, unused by scorer)
+│   ├── confidence.py         # ConfidenceQuality (pass-through, unused by scorer)
+│   └── vincent.py            # VincentsArea/Artifacts/MotionBlurQuality (pass-through)
 │
 ├── embeddings/
 │   ├── base.py               # Abstract EmbeddingModel
@@ -258,6 +288,7 @@ object_view_selection/
 ├── plotting_process/              # Diagnostic plotting submodule
 │   ├── wrapper.py                 # plot_all() + standalone CLI
 │   ├── misc_plot.py               # Rejection-reasons bar chart
+│   ├── pre_filter_plots.py        # Per-element pre-filter histograms
 │   ├── embedding_plots/           # 2D/3D DR scatter plots
 │   │   ├── base.py                # Shared scatter-drawing helpers
 │   │   └── {pca,mds,tsne,...}.py  # One file per DR method
@@ -269,8 +300,8 @@ object_view_selection/
 │   ├── run_smoke.py          # Smoke test runner
 │   ├── test_utils.py         # Shared helpers (make_circle_mask, make_flower, check)
 │   ├── smoke_test_utils.py   # Smoke test helpers
-│   ├── correctness_test_units/  # Test modules (101 tests)
-│   └── smoke_test_units/        # Smoke test modules (51 tests)
+│   ├── correctness_test_units/  # Test modules (273 checks)
+│   └── smoke_test_units/        # Smoke test modules (51 checks)
 │
 ├── docs/
 │   ├── pipeline.md              # Detailed pipeline documentation

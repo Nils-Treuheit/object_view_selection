@@ -141,13 +141,15 @@ def _plot_violin_set_scaled(
 
 
 def plot_quality_violins(accepted, rejected, selected, output_dir_pre, output_dir_sel, single_set_plots=True):
-    score_keys = ["blur", "area", "occlusion", "completeness", "confidence", "score"]
+    score_keys = ["blur", "area", "occlusion",
+                  "vincents_area", "vincents_artefacts", "vincents_motion_blur",
+                  "completeness", "confidence", "score"]
     palette = {"selected": "#e76f51", "non-selected": "#264653"}
 
     selected_ids = {s.id for s in selected}
     non_sel = [o for o in accepted if o.id not in selected_ids]
 
-    sep_idx = 3
+    sep_idx = 6
 
     df_ns = _build_df(non_sel, score_keys, "non-selected")
     df_sel = _build_df(selected, score_keys, "selected")
@@ -238,11 +240,15 @@ def plot_quality_violins(accepted, rejected, selected, output_dir_pre, output_di
         plt.close(fig)
         print(f"  Saved {output_dir_sel / 'violin_selected_vs_non_selected_scaled.png'}")
 
-    rejected_raw_keys = ["laplacian", "tenengrad", "area_ratio", "border_free", "hand_overlap_free", "completeness"]
+    rejected_raw_keys = ["laplacian", "tenengrad", "area_ratio", "border_free", "hand_overlap_free", "completeness",
+                         "vincent_area_fraction", "vincent_artifact_fraction", "vincent_boundary_blur_variance"]
     readable_labels = {
         "laplacian": "Laplacian", "tenengrad": "Tenengrad",
         "area_ratio": "Area Ratio", "border_free": "Border-Free Ratio",
         "hand_overlap_free": "Hand-Free Ratio", "completeness": "Completeness",
+        "vincent_area_fraction": "Mask Area Fraction",
+        "vincent_artifact_fraction": "Artifact Fraction",
+        "vincent_boundary_blur_variance": "Boundary Blur Variance",
     }
     df_rej = _build_df(rejected, rejected_raw_keys, "rejected")
     df_acc = _build_df(accepted, rejected_raw_keys, "accepted")
@@ -256,6 +262,8 @@ def plot_quality_violins(accepted, rejected, selected, output_dir_pre, output_di
             fig, axes = plt.subplots(1, n_raw, figsize=(3 * n_raw + 1, 4.5))
             for ax, key in zip(axes, rejected_raw_keys):
                 all_vals = combined_raw[key].dropna().values
+                if len(all_vals) == 0:
+                    continue
                 vmin_all, vmax_all = all_vals.min(), all_vals.max()
                 for i, (g, color) in enumerate([("rejected", "#e9c46a"), ("accepted", "#2a9d8f")]):
                     vals = combined_raw.loc[combined_raw["group"] == g, key].dropna().values

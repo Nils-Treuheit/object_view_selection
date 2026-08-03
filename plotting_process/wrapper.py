@@ -9,8 +9,10 @@ warnings.filterwarnings("ignore", message="The TBB threading layer")
 warnings.filterwarnings("ignore", message="The behavior of DataFrame concatenation")
 
 from .embedding_plots import run_all as run_embedding_plots
-from .quality_score_plots.violins import plot_quality_violins
+from .feature_plots import plot_bad_examples, plot_dataset_overview
 from .misc_plot import plot_rejection_reasons
+from .pre_filter_plots import plot_pre_filter_distributions
+from .quality_score_plots.violins import plot_quality_violins
 
 
 def _load_from_disk(input_dir):
@@ -35,7 +37,10 @@ def _load_from_disk(input_dir):
     for _, row in df.iterrows():
         id_to_metrics[row["id"]] = row.to_dict()
 
-    quality_scores = np.array([id_to_quality[oid] for oid in report["accepted_ids"]])
+    # embeddings.npy / selected_indices.npy are aligned to the selection pool
+    # (accepted observations above the quality floor), not to all accepted.
+    pool_ids = report.get("selection_pool_ids", report["accepted_ids"])
+    quality_scores = np.array([id_to_quality[oid] for oid in pool_ids])
 
     class _MockMetrics:
         def __init__(self, d):
@@ -43,10 +48,14 @@ def _load_from_disk(input_dir):
                 setattr(self, k, v)
 
     class _MockObs:
-        def __init__(self, oid, quality, metrics_dict):
+        def __init__(self, oid, quality, metrics_dict, rejection_reason=None):
             self.id = oid
             self.quality = quality
             self.metrics = _MockMetrics(metrics_dict)
+            self.rejection_reason = rejection_reason
+            data_root = Path(report.get("data_root", ""))
+            self.image_path = data_root / "images" / f"{oid}.png"
+            self.mask_path = data_root / "masks" / f"{oid}.png"
 
     accepted = [
         _MockObs(oid, id_to_quality[oid], id_to_metrics[oid])
@@ -70,7 +79,10 @@ def _load_from_disk(input_dir):
             for r in rej_data:
                 rej_id_to_metrics[r["id"]] = {}
         for r in rej_data:
-            rejected.append(_MockObs(r["id"], 0.0, rej_id_to_metrics.get(r["id"], {})))
+            rejected.append(_MockObs(
+                r["id"], 0.0, rej_id_to_metrics.get(r["id"], {}),
+                rejection_reason=r.get("reason"),
+            ))
 
     return accepted, rejected, selected, embeddings, selected_idx, quality_scores
 
@@ -118,6 +130,11 @@ def plot_all(
         dir_pre, plots_root / "selection",
         single_set_plots=single_set_plots,
     )
+
+    plot_pre_filter_distributions(accepted, rejected, dir_pre)
+
+    plot_dataset_overview(accepted, rejected, selected, dir_pre)
+    plot_bad_examples(accepted, rejected, selected, dir_pre)
 
     if embeddings is not None and len(embeddings) >= 2:
         run_embedding_plots(

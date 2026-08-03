@@ -16,6 +16,20 @@ class ObservationMetrics:
     edge_ratio: float = 0.0
     hand_overlap: float = 0.0
 
+    # vincent hard pre-filters
+    vincent_pixel_count: float = 0.0
+    vincent_touches_border: float = 0.0
+
+    # vincent soft pre-filters: raw stats
+    vincent_area_fraction: float = 0.0
+    vincent_artifact_fraction: float = 0.0
+    vincent_boundary_blur_variance: float = 0.0
+
+    # vincent soft pre-filters: population-adapted weights (0, 1]
+    vincents_area: float = 0.0
+    vincents_artefacts: float = 0.0
+    vincents_motion_blur: float = 0.0
+
     # shape
     solidity: float = 0.0
     extent: float = 0.0
