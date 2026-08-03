@@ -38,6 +38,7 @@ def build_filters(cfg: PipelineConfig, tuned=None):
         ),
         "border": BorderFilter(
             maximum_ratio=tuned.get("border_maximum_ratio", cfg.filters.border.maximum_ratio),
+            edge_maximum_ratio=tuned.get("border_edge_maximum_ratio", cfg.filters.border.edge_maximum_ratio),
             enabled=cfg.filters.border.enabled,
         ),
         "occlusion": OcclusionFilter(
@@ -204,6 +205,7 @@ def run_pipeline(cfg: PipelineConfig):
         tuned = tune_thresholds(dataset.observations)
         print(f"  area_minimum_ratio={tuned['area_minimum_ratio']}")
         print(f"  border_maximum_ratio={tuned['border_maximum_ratio']}")
+        print(f"  border_edge_maximum_ratio={tuned['border_edge_maximum_ratio']}")
         print(f"  laplacian_threshold={tuned['laplacian_threshold']}")
         print(f"  tenengrad_threshold={tuned['tenengrad_threshold']}")
         print(f"  occlusion_maximum_overlap={tuned['occlusion_maximum_overlap']}")
@@ -234,7 +236,7 @@ def run_pipeline(cfg: PipelineConfig):
         for reason, count in sorted(rejection_counts.items(), key=lambda x: -x[1]):
             print(f"    {reason}: {count}")
         if accepted:
-            raw_metrics = ["laplacian", "tenengrad", "area_ratio", "border_ratio", "hand_overlap", "completeness"]
+            raw_metrics = ["laplacian", "tenengrad", "area_ratio", "border_ratio", "edge_ratio", "hand_overlap", "completeness"]
             print("  Accepted raw metrics:")
             for key in raw_metrics:
                 vals = np.array([getattr(o.metrics, key, 0) for o in accepted])
@@ -302,6 +304,7 @@ def run_pipeline(cfg: PipelineConfig):
             "area_ratio": obs.metrics.area_ratio,
             "border_ratio": obs.metrics.border_ratio,
             "border_free": 1.0 - obs.metrics.border_ratio,
+            "edge_ratio": obs.metrics.edge_ratio,
             "hand_overlap": obs.metrics.hand_overlap,
             "solidity": obs.metrics.solidity,
             "extent": obs.metrics.extent,
@@ -354,6 +357,7 @@ def run_pipeline(cfg: PipelineConfig):
             "tenengrad": m.tenengrad,
             "area_ratio": m.area_ratio,
             "border_ratio": m.border_ratio,
+            "edge_ratio": m.edge_ratio,
             "hand_overlap": m.hand_overlap,
             "completeness": m.completeness,
         })

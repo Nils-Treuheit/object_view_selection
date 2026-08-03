@@ -14,6 +14,7 @@ Set `auto_thresholds: false` in `config.py` or pass `--no-auto-thresholds` to fa
 |--------|--------|-----------|-----------|
 | **Area** | `area_ratio` | **1st** (low end) | The smallest 1% of objects are rejected. Assumes >=99% of the dataset has usable object size. |
 | **Border** | `border_ratio` | **95th** (high end) | The 5% of observations with the most border touching are rejected. Border touching is almost always bad, so this is quite aggressive. |
+| **Border** | `edge_ratio` | **95th** (high end) | The 5% of observations with the most edge contact (object pinned to the frame) are rejected. Catches objects mostly cut off along an edge. |
 | **Blur** | `laplacian` | **5th** (low end) | The blurriest 5% are rejected. The sharper 95% are considered acceptable. |
 | **Blur** | `tenengrad` | **5th** (low end) | Same logic as laplacian — blurriest 5% rejected. |
 | **Occlusion** | `hand_overlap` | **95th** (high end) | The 5% most occluded observations are rejected. |
@@ -38,6 +39,7 @@ These are the absolute bounds enforced regardless of dataset statistics. Defined
 |--------------|-----|-----|-----------|
 | `area_minimum_ratio` | `0.01` (1%) | `0.05` (5%) | At least 1% of image must be object; never require more than 5% |
 | `border_maximum_ratio` | `0.001` (0.1%) | `0.05` (5%) | At most 0.1% of mask pixels may border the edge; never allow more than 5% |
+| `border_edge_maximum_ratio` | `0.05` (5%) | `0.5` (50%) | At most 5% of the mask extent may be pinned to a frame edge; never allow more than 50% |
 | `laplacian_threshold` | `30.0` | `200.0` | Minimum sharpness floor; never demand more than 200 variance |
 | `tenengrad_threshold` | `10.0` | `60.0` | Minimum gradient floor; never demand more than 60 |
 | `occlusion_maximum_overlap` | `0.001` (0.1%) | `0.30` (30%) | At most 0.1% overlap allowed at minimum; never allow more than 30% |
@@ -55,6 +57,7 @@ Used when `auto_thresholds: false` or when a tuned value is not provided.
 | `BlurConfig.tenengrad_threshold` | `35.0` | Tenengrad gradient threshold |
 | `AreaConfig.minimum_ratio` | `0.01` | Minimum mask-to-image area ratio |
 | `BorderConfig.maximum_ratio` | `0.05` | Maximum border-pixel-to-mask ratio |
+| `BorderConfig.edge_maximum_ratio` | `0.25` | Maximum fraction of mask extent pinned to a frame edge |
 | `OcclusionConfig.maximum_overlap` | `0.15` | Maximum hand-overlap-to-mask ratio |
 | `CompletenessConfig.minimum_score` | `0.65` | Minimum completeness score |
 | `ConfidenceConfig.minimum_confidence` | `0.5` | Minimum detection confidence |

@@ -60,13 +60,28 @@ reason  ∈ str       # rejection label
 
 Detects objects truncated by the image edge.
 
-**Metric:** `border_ratio = (mask ∩ border_pixels) / total_mask_pixels`
+**Metrics:**
 
-The image border is defined as the first/last row and first/last column of the image. Any mask pixel on these edges counts as a border pixel.
+- `border_ratio = (mask ∩ border_pixels) / total_mask_pixels`
 
-**Decision:** reject if `border_ratio > maximum_ratio`
+  The image border is defined as the first/last row and first/last column of the image. Any mask pixel on these edges counts as a border pixel. This catches objects that are flush against the frame.
 
-**Config:** `BorderConfig(maximum_ratio=0.05)` — default 5%, but auto-tuning typically sets this much tighter (0.001–0.005).
+- `edge_ratio = max(top, bottom, left, right)` where each per-edge value is the length of mask touching that image edge divided by the mask extent in the perpendicular direction:
+
+  ```
+  edge_top    = |mask[0, :]| / |columns the mask occupies|
+  edge_bottom = |mask[-1, :]| / |columns the mask occupies|
+  edge_left   = |mask[:, 0]| / |rows the mask occupies|
+  edge_right  = |mask[:, -1]| / |rows the mask occupies|
+  ```
+
+  This is the key signal for truncation: an object cut off along an edge pins a large fraction of its width/height to the frame, so the ratio approaches 1. A fully-visible object that merely grazes an edge only touches a few pixels, keeping the ratio near 0. This catches objects that are "mostly cut off" even when their visible part is large (where `border_ratio` alone stays below the threshold).
+
+The per-edge values are also stored as `edge_top_ratio`, `edge_bottom_ratio`, `edge_left_ratio`, `edge_right_ratio`.
+
+**Decision:** reject if `border_ratio > maximum_ratio` OR `edge_ratio > edge_maximum_ratio`
+
+**Config:** `BorderConfig(maximum_ratio=0.05, edge_maximum_ratio=0.25)` — default 5% ring contact and 25% edge contact, but auto-tuning typically sets these much tighter.
 
 ### AreaFilter
 
@@ -125,7 +140,7 @@ Measures how complete the visible object shape is using three geometric cues:
 
 Defined in `FilterConfig.filter_order`. The default order is chosen for efficiency and specificity:
 
-1. **border** — cheap, catches obvious truncation
+1. **border** — cheap, catches truncation (ring contact + per-edge contact)
 2. **area** — cheap, rejects tiny masks
 3. **confidence** — cheap (disabled by default)
 4. **blur** — moderately expensive (requires image)
@@ -194,6 +209,7 @@ When `auto_thresholds: True` (default), the pipeline pre-computes thresholds fro
 |-----------|-----------|-----------|---------------|
 | `area_minimum_ratio` | 1st | low end | [0.01, 0.05] |
 | `border_maximum_ratio` | 95th | high end | [0.001, 0.05] |
+| `border_edge_maximum_ratio` | 95th | high end | [0.05, 0.5] |
 | `laplacian_threshold` | 5th | low end | [30, 200] |
 | `tenengrad_threshold` | 5th | low end | [10, 60] |
 | `occlusion_maximum_overlap` | 95th | high end | [0.001, 0.30] |
@@ -376,6 +392,7 @@ All pipeline parameters are defined in `config.py`.
 | | `blur.tenengrad_threshold` | 35.0 | Tenengrad gradient threshold |
 | | `area.minimum_ratio` | 0.01 | Minimum mask area ratio |
 | | `border.maximum_ratio` | 0.05 | Maximum border-touching ratio |
+| | `border.edge_maximum_ratio` | 0.25 | Maximum fraction of mask pinned to a frame edge |
 | | `occlusion.maximum_overlap` | 0.15 | Maximum hand overlap ratio |
 | | `completeness.minimum_score` | 0.65 | Minimum completeness score |
 | | `filter_order` | `[border, area, confidence, blur, occlusion, completeness]` | Pipeline execution order |

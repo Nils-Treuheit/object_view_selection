@@ -18,6 +18,7 @@ class AreaConfig:
 class BorderConfig:
     enabled: bool = True
     maximum_ratio: float = 0.05
+    edge_maximum_ratio: float = 0.25
 
 
 @dataclass
