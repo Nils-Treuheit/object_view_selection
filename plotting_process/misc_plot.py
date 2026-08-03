@@ -5,6 +5,29 @@ import numpy as np
 from matplotlib import pyplot as plt
 
 
+# Display labels for the raw filter reasons. The truncation filter ("border")
+# and the border-pixel filter ("vincent_border_pixel") both detect the same
+# failure mode — the object is cut off / touching the frame edge — so they are
+# aggregated into one "truncation" bar. Occlusion (hand or other object
+# covering the object) is always shown as its own separate bar so the two
+# failure modes never get merged into one bucket.
+REASON_LABELS = {
+    "vincent_empty_mask": "empty mask",
+    "empty_mask": "empty mask",
+    "vincent_border_pixel": "truncation (object out of frame)",
+    "border": "truncation (object out of frame)",
+    "truncation": "truncation (object out of frame)",
+    "small_object": "small object (low mask area)",
+    "low_confidence": "low confidence",
+    "blur": "blurred (low sharpness)",
+    "motion_blur": "motion blur (smeared boundary)",
+    "occlusion": "occlusion (hand / other object)",
+    "incomplete_shape": "incomplete / non-compact mask",
+    "completeness": "incomplete / non-compact mask",
+    "unknown": "unknown",
+}
+
+
 def plot_rejection_reasons(results_dir, output_dir):
     rej_path = results_dir / "rejected.json"
     if not rej_path.exists():
@@ -13,21 +36,25 @@ def plot_rejection_reasons(results_dir, output_dir):
     with open(rej_path) as f:
         rej_data = json.load(f)
 
-    reasons = {}
+    display = {}
     for r in rej_data:
         reason = r.get("reason", "unknown")
-        reasons[reason] = reasons.get(reason, 0) + 1
+        label = REASON_LABELS.get(reason, reason)
+        display[label] = display.get(label, 0) + 1
 
-    if not reasons:
+    if not display:
         return
 
-    fig, ax = plt.subplots(figsize=(6, 4))
-    labels = list(reasons.keys())
-    counts = list(reasons.values())
+    # sorted by count, largest first; occlusion and truncation stay distinct
+    ordered = sorted(display, key=display.get, reverse=True)
+    labels = list(ordered)
+    counts = [display[k] for k in ordered]
+
+    fig, ax = plt.subplots(figsize=(7.5, 4.5))
     colors = plt.cm.Set2(np.linspace(0, 1, len(labels)))
     ax.barh(labels, counts, color=colors)
     ax.set_xlabel("Count")
-    ax.set_title("Rejection Reasons")
+    ax.set_title("Rejection Reasons (occlusion and truncation kept separate)")
     for i, v in enumerate(counts):
         ax.text(v + 0.3, i, str(v), va="center", fontsize=9)
     fig.tight_layout()

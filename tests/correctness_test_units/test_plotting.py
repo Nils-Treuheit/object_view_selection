@@ -378,26 +378,68 @@ def test_feature_overview_plots_saved():
         check(overview.is_dir(), "data_set_overview/ exists")
         check(bad.is_dir(), "bad_examples/ exists")
 
-        # one image per feature, prefixed raw_filter_ / quality_score_
-        for prefix in ["raw_filter_laplacian", "raw_filter_area_ratio",
-                        "raw_filter_vincent_boundary_blur_variance"]:
-            check((overview / f"{prefix}.png").exists(), f"data_set_overview/{prefix}.png saved")
-            check((bad / f"{prefix}.png").exists(), f"bad_examples/{prefix}.png saved")
-        for prefix in ["quality_score_blur", "quality_score_occlusion", "quality_score_score"]:
-            check((overview / f"{prefix}.png").exists(), f"data_set_overview/{prefix}.png saved")
-            check((bad / f"{prefix}.png").exists(), f"bad_examples/{prefix}.png saved")
+        # two overview variants per feature (fixed + relative) and one
+        # bad_examples image per feature, prefixed raw_filter_ / quality_score_
+        for name in ["raw_filter_laplacian", "raw_filter_area_ratio",
+                     "raw_filter_vincent_boundary_blur_variance",
+                     "quality_score_blur", "quality_score_occlusion", "quality_score_score"]:
+            check((overview / f"{name}_fixed.png").exists(), f"data_set_overview/{name}_fixed.png saved")
+            check((overview / f"{name}_relative.png").exists(), f"data_set_overview/{name}_relative.png saved")
+            check((bad / f"{name}.png").exists(), f"bad_examples/{name}.png saved")
 
-        # no legacy combined images
+        # no legacy combined images / no non-suffixed overview images
         check(not (pre / "dataset_overview_raw.png").exists(), "no legacy dataset_overview_raw.png")
         check(not (pre / "bad_examples_raw.png").exists(), "no legacy bad_examples_raw.png")
+        check(not (overview / "raw_filter_laplacian.png").exists(), "no non-suffixed overview image")
 
         for f in list(overview.glob("*.png")) + list(bad.glob("*.png")):
             check(f.stat().st_size > 1024, f"{f.name} has content")
 
 
+def test_bad_examples_select_rejected_only():
+    """bad_examples selects only filtered-out frames, worst-first, capped at 5."""
+    from plotting_process.feature_plots import _worst_rejected
+
+    embeddings, qs, sel_idx = _make_synthetic_data(30, 8, 4)
+    accepted, rejected, selected = _make_mock_observations(embeddings, qs, sel_idx)
+
+    for i, o in enumerate(rejected):
+        o.metrics.area_ratio = float(i + 1) / 10.0
+
+    picked = _worst_rejected(rejected, "area_ratio", 1, 5)
+    check(len(picked) == 5, f"capped at 5 (got {len(picked)})")
+    check(all(o in rejected for o, _ in picked), "only filtered-out frames are selected")
+    vals = [v for _, v in picked]
+    check(vals == sorted(vals), "worst (lowest) frames come first")
+
+    picked_all = _worst_rejected(rejected, "area_ratio", 1, 100)
+    check(len(picked_all) == len(rejected),
+          f"k > available returns all (got {len(picked_all)})")
+
+
+def test_bad_examples_placeholders_when_few_rejected():
+    """bad_examples writes a placeholder tile when fewer than 5 are rejected."""
+    from plotting_process.feature_plots import plot_bad_examples
+
+    embeddings, qs, sel_idx = _make_synthetic_data(30, 8, 4)
+    accepted, rejected, selected = _make_mock_observations(embeddings, qs, sel_idx)
+    rejected = rejected[:2]  # fewer than the default 5
+
+    with tempfile.TemporaryDirectory() as tmp:
+        out = Path(tmp) / "pre-filter"
+        out.mkdir(parents=True)
+        plot_bad_examples(accepted, rejected, selected, out)
+
+        pre = out / "bad_examples"
+        check((pre / "raw_filter_laplacian.png").exists(), "raw bad_examples saved")
+        check((pre / "quality_score_score.png").exists(), "quality bad_examples saved")
+        check((pre / "raw_filter_laplacian.png").stat().st_size > 1024, "bad_examples has content")
+
+
 def test_dataset_overview_hist_xlim():
     """Histogram x-axis is [-0.05, 1.05] for [0, 1]-bounded features only."""
     from matplotlib import pyplot as plt
+    from matplotlib.colors import Normalize
     from plotting_process.feature_plots import _plot_metric_row, FIXED_HIST_XLIM
 
     embeddings, qs, sel_idx = _make_synthetic_data(30, 8, 4)
@@ -406,7 +448,8 @@ def test_dataset_overview_hist_xlim():
     # 0-1 bounded feature (area_ratio) -> fixed xlim
     fig, (ax_hist, ax_scatter) = plt.subplots(1, 2)
     _plot_metric_row(ax_hist, ax_scatter, accepted, rejected, selected,
-                     "area_ratio", "Area Ratio", plt.cm.coolwarm)
+                     "area_ratio", "Area Ratio", 1,
+                     plt.cm.coolwarm, Normalize(0.0, 1.0), "goodness")
     lo, hi = ax_hist.get_xlim()
     check(abs(lo - FIXED_HIST_XLIM[0]) < 1e-9, f"area_ratio lower xlim {lo}")
     check(abs(hi - FIXED_HIST_XLIM[1]) < 1e-9, f"area_ratio upper xlim {hi}")
@@ -415,10 +458,23 @@ def test_dataset_overview_hist_xlim():
     # unbounded feature (laplacian variance) -> not fixed to [0, 1]
     fig, (ax_hist, ax_scatter) = plt.subplots(1, 2)
     _plot_metric_row(ax_hist, ax_scatter, accepted, rejected, selected,
-                     "laplacian", "Laplacian", plt.cm.coolwarm)
+                     "laplacian", "Laplacian", 1,
+                     plt.cm.coolwarm, Normalize(0.0, 1.0), "goodness")
     lo, hi = ax_hist.get_xlim()
     check(hi > 1.05, f"laplacian upper xlim {hi} not clipped to [0, 1]")
     plt.close(fig)
+
+
+def test_dataset_overview_inverts_flipped_features():
+    """Goodness is 1.0=good / 0.0=bad even for lower-is-better features."""
+    from plotting_process.feature_plots import _goodness
+
+    # lower-is-better: a low raw value (good) must map to goodness ~1.0
+    check(_goodness(0.0, 0.0, 1.0, -1) == 1.0, "border_ratio=0 (good) -> goodness 1")
+    check(_goodness(1.0, 0.0, 1.0, -1) == 0.0, "border_ratio=1 (bad) -> goodness 0")
+    # higher-is-better: a high raw value (good) maps to goodness ~1.0
+    check(_goodness(1.0, 0.0, 1.0, 1) == 1.0, "laplacian=max (good) -> goodness 1")
+    check(_goodness(0.0, 0.0, 1.0, 1) == 0.0, "laplacian=min (bad) -> goodness 0")
 
 
 def test_feature_plots_warm_cold_colormap():

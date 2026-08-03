@@ -151,7 +151,11 @@ outputs/
     │   ├── violin_rejected_vs_accepted_scaled.png
     │   ├── pre_filter_raw_stats.png       # All pre-filter elements (accepted vs rejected)
     │   ├── pre_filter_soft_weights.png    # Vincent soft-filter population weights
-    │   └── rejection_reasons.png
+    │   ├── rejection_reasons.png          # Occlusion and truncation kept as separate bars
+    │   ├── data_set_overview/             # Per-feature overview, two variants each:
+    │   │   └── {raw_filter_,quality_score_}<feature>_{fixed,relative}.png
+    │   └── bad_examples/                  # Up to 5 filtered-out frames per feature
+    │       └── {raw_filter_,quality_score_}<feature>.png
     │
     └── selection/
         ├── violin_*.png                   # Quality-score violins
