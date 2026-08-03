@@ -287,6 +287,99 @@ def test_border_corner_case():
     )
 
 
+def test_border_cutoff_each_edge():
+
+    img = make_image(100, 100)
+
+    bf = BorderFilter(
+        maximum_ratio=0.05,
+        edge_maximum_ratio=0.25,
+    )
+
+    cases = {
+        "top": (slice(0, 30), slice(None)),
+        "bottom": (slice(70, 100), slice(None)),
+        "left": (slice(None), slice(0, 30)),
+        "right": (slice(None), slice(70, 100)),
+    }
+
+    for edge, (rs, cs) in cases.items():
+        mask = np.zeros((100, 100), np.uint8)
+        mask[rs, cs] = 255
+
+        obs = observation(img, mask)
+        _, passed, _ = bf.evaluate(obs)
+
+        check(
+            not passed,
+            f"Object cut off at {edge} edge rejected",
+        )
+
+        # The ring/area ratio alone is 100/(100*30) ~ 0.033 < 0.05,
+        # so it is the per-edge contact ratio that triggers rejection.
+        expected_edge = 100 / 100
+        attr = f"edge_{edge}_ratio"
+        check(
+            abs(getattr(obs.metrics, attr) - expected_edge) < 1e-4,
+            f"  {attr}={getattr(obs.metrics, attr):.3f}",
+        )
+
+
+def test_border_fully_visible_tangent_accepted():
+
+    img = make_image(100, 100)
+
+    # Circle fully in frame, tangent to the bottom edge.
+    mask = make_circle_mask(
+        100,
+        100,
+        radius=30,
+        center=(50, 69),
+    )
+
+    bf = BorderFilter(
+        maximum_ratio=0.05,
+        edge_maximum_ratio=0.25,
+    )
+
+    obs = observation(img, mask)
+    _, passed, _ = bf.evaluate(obs)
+
+    check(
+        passed,
+        "Fully visible tangent circle accepted",
+    )
+
+    check(
+        obs.metrics.edge_bottom_ratio < 0.05,
+        f"Tangent contact ratio={obs.metrics.edge_bottom_ratio:.3f}",
+    )
+
+
+def test_border_centered_accepted():
+
+    img = make_image(100, 100)
+
+    mask = np.zeros((100, 100), np.uint8)
+    mask[25:75, 25:75] = 255
+
+    bf = BorderFilter(
+        maximum_ratio=0.05,
+        edge_maximum_ratio=0.25,
+    )
+
+    obs = observation(img, mask)
+    score, passed, _ = bf.evaluate(obs)
+
+    check(passed, "Centered object accepted")
+    check(abs(score - 1.0) < 1e-4, f"Centered score={score:.3f}")
+
+    check(
+        obs.metrics.edge_ratio == 0.0,
+        "Centered object has zero edge contact",
+    )
+
+
 # ============================================================
 # OCCLUSION
 # ============================================================

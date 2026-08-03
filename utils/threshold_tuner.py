@@ -19,6 +19,7 @@ from preprocessing.occlusion_filter import OcclusionFilter
 def compute_metric_stats(observations):
     areas = []
     borders = []
+    edges = []
     laplacians = []
     tenengrads = []
     overlaps = []
@@ -33,6 +34,7 @@ def compute_metric_stats(observations):
 
         areas.append(obs.metrics.area_ratio)
         borders.append(obs.metrics.border_ratio)
+        edges.append(obs.metrics.edge_ratio)
         laplacians.append(obs.metrics.laplacian)
         tenengrads.append(obs.metrics.tenengrad)
         overlaps.append(obs.metrics.hand_overlap)
@@ -41,6 +43,7 @@ def compute_metric_stats(observations):
     return dict(
         area_ratio=np.array(areas),
         border_ratio=np.array(borders),
+        edge_ratio=np.array(edges),
         laplacian=np.array(laplacians),
         tenengrad=np.array(tenengrads),
         hand_overlap=np.array(overlaps),
@@ -51,6 +54,7 @@ def compute_metric_stats(observations):
 DEFAULT_PERCENTILES = dict(
     area_ratio=1,
     border_ratio=95,
+    edge_ratio=95,
     laplacian=5,
     tenengrad=5,
     hand_overlap=95,
@@ -60,9 +64,12 @@ DEFAULT_PERCENTILES = dict(
 
 SAFETY_LIMITS = dict(
     area_minimum_ratio=dict(min=0.01, max=0.05),
-    border_maximum_ratio=dict(min=0.001, max=0.05),
+    #border_maximum_ratio=dict(min=0.001, max=0.05),
     laplacian_threshold=dict(min=5.0, max=200.0),
     tenengrad_threshold=dict(min=3.0, max=60.0),
+    border_edge_maximum_ratio=dict(min=0.05, max=0.5),
+    #laplacian_threshold=dict(min=30.0, max=200.0),
+    #tenengrad_threshold=dict(min=10.0, max=60.0),
     occlusion_maximum_overlap=dict(min=0.001, max=0.30),
     completeness_minimum_score=dict(min=0.50, max=0.80),
 )
@@ -76,6 +83,7 @@ def tune_thresholds(observations, percentiles=None):
 
     p_area = np.percentile(stats["area_ratio"], percentiles["area_ratio"])
     p_border = np.percentile(stats["border_ratio"], percentiles["border_ratio"])
+    p_edge = np.percentile(stats["edge_ratio"], percentiles["edge_ratio"])
     p_lap = np.percentile(stats["laplacian"], percentiles["laplacian"])
     p_ten = np.percentile(stats["tenengrad"], percentiles["tenengrad"])
     p_overlap = np.percentile(stats["hand_overlap"], percentiles["hand_overlap"])
@@ -90,6 +98,11 @@ def tune_thresholds(observations, percentiles=None):
         p_border,
         SAFETY_LIMITS["border_maximum_ratio"]["min"],
         SAFETY_LIMITS["border_maximum_ratio"]["max"],
+    )
+    border_edge_max = np.clip(
+        p_edge,
+        SAFETY_LIMITS["border_edge_maximum_ratio"]["min"],
+        SAFETY_LIMITS["border_edge_maximum_ratio"]["max"],
     )
     lap_thresh = np.clip(
         p_lap,
@@ -115,6 +128,7 @@ def tune_thresholds(observations, percentiles=None):
     return dict(
         area_minimum_ratio=float(round(area_min, 4)),
         border_maximum_ratio=float(round(border_max, 4)),
+        border_edge_maximum_ratio=float(round(border_edge_max, 4)),
         laplacian_threshold=float(round(lap_thresh, 1)),
         tenengrad_threshold=float(round(ten_thresh, 1)),
         occlusion_maximum_overlap=float(round(occ_max, 4)),

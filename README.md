@@ -25,7 +25,13 @@ git clone <repo> && cd object_view_selection
 python3 -m venv .venv
 source .venv/bin/activate
 
-# Install dependencies
+# Install dependencies via uv sync
+uv sync 
+
+# or: Install dependencies with pip
+pip install -r requirements.txt
+
+# or: Manual install dependencies
 pip install numpy opencv-python scipy scikit-image scikit-learn Pillow tqdm pandas matplotlib
 
 # For learned embeddings (optional):

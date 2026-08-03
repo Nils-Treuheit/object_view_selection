@@ -9,6 +9,11 @@ class ObservationMetrics:
     tenengrad: float = 0.0
     area_ratio: float = 0.0
     border_ratio: float = 0.0
+    edge_top_ratio: float = 0.0
+    edge_bottom_ratio: float = 0.0
+    edge_left_ratio: float = 0.0
+    edge_right_ratio: float = 0.0
+    edge_ratio: float = 0.0
     hand_overlap: float = 0.0
 
     # shape
