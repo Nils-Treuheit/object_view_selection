@@ -375,31 +375,48 @@ def test_feature_overview_plots_saved():
         pre = out / "plots" / "pre-filter"
         overview = pre / "data_set_overview"
         bad = pre / "bad_examples"
+        pre_stage = bad / "pre-filter_stage"
+        sel_stage = bad / "selection_stage"
         check(overview.is_dir(), "data_set_overview/ exists")
-        check(bad.is_dir(), "bad_examples/ exists")
+        check(pre_stage.is_dir(), "bad_examples/pre-filter_stage/ exists")
+        check(sel_stage.is_dir(), "bad_examples/selection_stage/ exists")
 
         # bounded features get both variants (fixed + relative); unbounded
         # counting stats (laplacian, tenengrad, boundary-blur variance) get
-        # the relative plot only. One bad_examples image per feature.
+        # the relative plot only. Bad-example images land in the stage folders.
         for name in ["raw_filter_laplacian", "raw_filter_tenengrad",
                      "raw_filter_vincent_boundary_blur_variance"]:
             check(not (overview / f"{name}_fixed.png").exists(),
                   f"no fixed variant for unbounded {name}")
             check((overview / f"{name}_relative.png").exists(),
                   f"data_set_overview/{name}_relative.png saved")
-            check((bad / f"{name}.png").exists(), f"bad_examples/{name}.png saved")
         for name in ["raw_filter_area_ratio",
                      "quality_score_blur", "quality_score_occlusion", "quality_score_score"]:
             check((overview / f"{name}_fixed.png").exists(), f"data_set_overview/{name}_fixed.png saved")
             check((overview / f"{name}_relative.png").exists(), f"data_set_overview/{name}_relative.png saved")
-            check((bad / f"{name}.png").exists(), f"bad_examples/{name}.png saved")
 
-        # no legacy combined images / no non-suffixed overview images
+        # mock rejected frames all carry reason "blur" -> laplacian/tenengrad
+        # get *_filtered.png; every other stat falls back to lower_*_quality.png
+        check((pre_stage / "laplacian_filtered.png").exists(),
+              "pre-filter_stage/laplacian_filtered.png saved (reason blur fired)")
+        check(not (pre_stage / "area_ratio_filtered.png").exists(),
+              "no small_object rejections -> no area_ratio_filtered.png")
+        check((pre_stage / "lower_area_ratio_quality.png").exists(),
+              "pre-filter_stage/lower_area_ratio_quality.png saved")
+        check((sel_stage / "lower_blur_quality.png").exists(),
+              "selection_stage/lower_blur_quality.png saved")
+        check((sel_stage / "lower_score_quality.png").exists(),
+              "selection_stage/lower_score_quality.png saved")
+
+        # no legacy combined images / no non-suffixed overview images / no
+        # flat bad_examples images
         check(not (pre / "dataset_overview_raw.png").exists(), "no legacy dataset_overview_raw.png")
         check(not (pre / "bad_examples_raw.png").exists(), "no legacy bad_examples_raw.png")
         check(not (overview / "raw_filter_laplacian.png").exists(), "no non-suffixed overview image")
+        check(not (bad / "raw_filter_laplacian.png").exists(), "no flat bad_examples image")
+        check(not (bad / "quality_score_score.png").exists(), "no flat quality bad_examples image")
 
-        for f in list(overview.glob("*.png")) + list(bad.glob("*.png")):
+        for f in list(overview.glob("*.png")) + list(pre_stage.glob("*.png")) + list(sel_stage.glob("*.png")):
             check(f.stat().st_size > 1024, f"{f.name} has content")
 
 
@@ -464,10 +481,11 @@ def test_bad_examples_placeholders_when_few_rejected():
         out.mkdir(parents=True)
         plot_bad_examples(accepted, rejected, selected, out)
 
-        pre = out / "bad_examples"
-        check((pre / "raw_filter_laplacian.png").exists(), "raw bad_examples saved")
-        check((pre / "quality_score_score.png").exists(), "quality bad_examples saved")
-        check((pre / "raw_filter_laplacian.png").stat().st_size > 1024, "bad_examples has content")
+        pre_stage = out / "bad_examples" / "pre-filter_stage"
+        sel_stage = out / "bad_examples" / "selection_stage"
+        check((pre_stage / "laplacian_filtered.png").exists(), "pre-filter_stage bad_examples saved")
+        check((sel_stage / "lower_score_quality.png").exists(), "selection_stage bad_examples saved")
+        check((pre_stage / "laplacian_filtered.png").stat().st_size > 1024, "bad_examples has content")
 
 
 def test_report_value_inverts_lower_is_better_features():
@@ -516,6 +534,92 @@ def test_bad_examples_unhashable_observations():
     picked = _curated_bad_examples(rejected, "area_ratio", 1, 5)
     check(len(picked) == 5, f"unhashable observations picked 5 (got {len(picked)})")
     check(picked[0][0].id == 0, "worst unhashable frame first")
+
+
+def test_bad_examples_filtered_reason_scoped():
+    """*_filtered.png shows only frames rejected for that feature's reason."""
+    from unittest import mock
+    from plotting_process.feature_plots import plot_bad_examples
+
+    accepted = [_MockObs(i, 0.8, {"area_ratio": 0.9, "border_ratio": 0.2, "laplacian": 50.0})
+                for i in range(20)]
+    rejected = []
+    for i in range(3):
+        o = _MockObs(100 + i, 0.0, {"area_ratio": 0.01, "laplacian": 10.0})
+        o.rejection_reason = "small_object"
+        rejected.append(o)
+    for i in range(4):
+        o = _MockObs(200 + i, 0.0, {"area_ratio": 0.8, "laplacian": 2.0})
+        o.rejection_reason = "blur"
+        rejected.append(o)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        out = Path(tmp)
+        with mock.patch("plotting_process.feature_plots._save_example_row") as mock_save:
+            plot_bad_examples(accepted, rejected, [], out)
+            calls = {Path(c.args[-1]).name: c.args[0] for c in mock_save.call_args_list}
+
+        check("area_ratio_filtered.png" in calls, "area_ratio_filtered.png produced")
+        check("laplacian_filtered.png" in calls, "laplacian_filtered.png produced")
+        check({o.id for o, _ in calls["area_ratio_filtered.png"]} == {100, 101, 102},
+              "area_ratio_filtered only small_object frames")
+        check({o.id for o, _ in calls["laplacian_filtered.png"]} == {200, 201, 202, 203},
+              "laplacian_filtered only blur frames")
+        # a feature whose reason never fired must not get a *_filtered.png,
+        # and must instead fall back to lower_*_quality.png from accepted
+        check("border_ratio_filtered.png" not in calls, "no border_ratio_filtered.png")
+        check("lower_border_ratio_quality.png" in calls, "border_ratio fell back to lower_*_quality.png")
+        check(all(o.id in range(20) for o, _ in calls["lower_border_ratio_quality.png"]),
+              "lower_*_quality samples accepted frames, not rejected")
+        check("lower_area_ratio_quality.png" not in calls,
+              "no lower_*_quality when the reason fired")
+
+
+def test_prob_sample_low_quality_prefers_worst():
+    """Probability sampling favours the lowest-quality frames."""
+    from plotting_process.feature_plots import _prob_sample_low_quality
+
+    pool = [_MockObs(i, 0.0, {"laplacian": v}) for i, v in enumerate([3.0, 1.0, 0.0, 2.0])]
+    picked_vals = []
+    for seed in range(400):
+        picked = _prob_sample_low_quality(pool, "laplacian", 1, 1,
+                                          rng=np.random.default_rng(seed))
+        picked_vals.append(picked[0][1])
+    # uniform sampling would average 1.5; the prob sample must sit far below
+    check(float(np.mean(picked_vals)) < 1.1,
+          f"sampled frames are low-quality on average (mean {np.mean(picked_vals):.3f})")
+
+    picked2 = _prob_sample_low_quality(pool, "laplacian", 1, 2,
+                                       rng=np.random.default_rng(0))
+    check(len(picked2) == 2, "sample size respected")
+    check(len({o.id for o, _ in picked2}) == 2, "sampled without replacement")
+
+
+def test_histogram_bars_centered_on_bin_values():
+    """Histogram bars are centred on the bin values (0.0 bar centres on 0.0)."""
+    from matplotlib import pyplot as plt
+    from matplotlib.colors import Normalize
+    from plotting_process.feature_plots import _plot_metric_row
+
+    embeddings, qs, sel_idx = _make_synthetic_data(30, 8, 4)
+    accepted, rejected, selected = _make_mock_observations(embeddings, qs, sel_idx)
+
+    fig, (ax_hist, ax_scatter) = plt.subplots(1, 2)
+    _plot_metric_row(ax_hist, ax_scatter, accepted, rejected, selected,
+                     "area_ratio", "Area Ratio", 1,
+                     plt.cm.coolwarm, Normalize(0.0, 1.0), "goodness")
+    centers = np.array(sorted(p.get_x() + p.get_width() / 2.0 for p in ax_hist.patches))
+    check(len(centers) > 0, "histogram produced bars")
+    # the rejected mocks sit at value 0.0 -> their bar must be centred at 0.0
+    check(abs(centers.min()) < 1e-6, f"0.0 bar centred on 0.0 (got {centers.min():.6f})")
+    # every bar centre must sit on the value grid anchored at 0.0
+    d = np.diff(centers)
+    w = d[d > 1e-9].min() if (d > 1e-9).any() else None
+    if w is not None:
+        frac = (centers - centers.min()) / w
+        check(np.allclose(frac, np.round(frac), atol=1e-6),
+              "all bars sit on the value grid anchored at 0.0")
+    plt.close(fig)
 
 
 def test_dataset_overview_hist_xlim():

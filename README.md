@@ -154,8 +154,11 @@ outputs/
     │   ├── rejection_reasons.png          # Occlusion and truncation kept as separate bars
     │   ├── data_set_overview/             # Per-feature overview, two variants each:
     │   │   └── {raw_filter_,quality_score_}<feature>_{fixed,relative}.png
-    │   └── bad_examples/                  # Up to 5 filtered-out frames per feature
-    │       └── {raw_filter_,quality_score_}<feature>.png
+    │   └── bad_examples/                  # Per-stage example frames
+    │       ├── pre-filter_stage/          # <feature>_filtered.png (reason-matched) or
+    │       │   └── {<feature>_filtered,lower_<feature>_quality}.png
+    │       └── selection_stage/           # lower_<feature>_quality.png (prob-sampled)
+    │           └── lower_<feature>_quality.png
     │
     └── selection/
         ├── violin_*.png                   # Quality-score violins

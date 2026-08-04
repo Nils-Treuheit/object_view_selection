@@ -12,8 +12,11 @@ Output layout (inside the pre-filter plots dir):
     quality_score_<feature>_fixed.png
     quality_score_<feature>_relative.png
   bad_examples/
-    raw_filter_<feature>.png       # up to 5 filtered-out frames per raw stat
-    quality_score_<feature>.png    # up to 5 filtered-out frames per quality score
+    pre-filter_stage/
+      <feature>_filtered.png         # up to 5 frames actually rejected for that feature's reason
+      lower_<feature>_quality.png    # prob-sampled lowest-quality accepted frames (reason never fired)
+    selection_stage/
+      lower_<feature>_quality.png    # prob-sampled lowest-quality accepted frames per quality score
 
 Each data_set_overview image has a distribution histogram on the left (x-axis
 fixed to [-0.05, 1.05] when the feature is bounded to [0, 1]) and the feature
@@ -43,11 +46,15 @@ differ in the colourbar scale:
 Neither title nor colourbar carries a "(fixed 0..1)" / "(relative …)" suffix;
 the colourbar is just the numbers, written out in full (no e-notation).
 
-The bad_examples images only ever show frames that were actually filtered out.
-The worst frame is always included; the rest are picked worst-first but must
-look visually distinct from the frames already shown, so a run of near
-identical video frames never fills the whole row. Placeholder tiles fill any
-empty slots.
+The pre-filter_stage images only ever show frames that were actually filtered
+out for that feature's own reason. The worst frame is always included; the
+rest are picked worst-first but must look visually distinct from the frames
+already shown, so a run of near identical video frames never fills the whole
+row. Placeholder tiles fill any empty slots. When a pre-filter's reason never
+fired, and for every quality score, the image instead probability-samples the
+lowest-quality *accepted* frames (worst = highest likelihood), so these plots
+show what low quality looks like without pretending those frames were
+filtered.
 """
 
 from pathlib import Path
@@ -173,6 +180,26 @@ def _feature_values(observations, attr):
 
 # attr -> good_direction lookup shared by RAW_FEATURES and QUALITY_FEATURES
 _FEATURE_DIRECTION = {attr: gd for attr, _, gd in RAW_FEATURES + QUALITY_FEATURES}
+
+# Pre-filter raw stat -> the rejection reasons that feature detects. A frame is
+# shown in ``<attr>_filtered.png`` only when it was rejected for one of these
+# reasons (the truncation filters "border"/"truncation" and the border-pixel
+# detector "vincent_border_pixel" all detect the same failure mode and share
+# the border/edge stats). A feature with no reasons (the Vincent soft stats)
+# never hard-rejects and always falls back to the prob-sampled
+# ``lower_<attr>_quality.png`` form.
+_FEATURE_REASONS = {
+    "laplacian": ("blur",),
+    "tenengrad": ("blur",),
+    "area_ratio": ("small_object",),
+    "border_ratio": ("border", "truncation", "vincent_border_pixel"),
+    "edge_ratio": ("border", "truncation", "vincent_border_pixel"),
+    "hand_overlap": ("occlusion",),
+    "completeness": ("incomplete_shape", "completeness"),
+    "vincent_area_fraction": ("vincent_empty_mask", "empty_mask"),
+    "vincent_artifact_fraction": (),
+    "vincent_boundary_blur_variance": (),
+}
 
 
 def _report_value(attr, value):
@@ -308,13 +335,24 @@ def _plot_metric_row(ax_hist, ax_scatter, accepted, rejected, selected,
         return
     lo, hi = float(combined.min()), float(combined.max())
 
+    # bars are centred on the distribution bins: matplotlib's align='left'
+    # places each bar centred on the provided bin edge, so the bar covering
+    # value v is centred on v (e.g. the bar for 0.0 is centred at 0.0, not at
+    # 0.0 + width/2).
+    nbins = 40
+    if hi > lo:
+        bin_edges = np.linspace(lo, hi, nbins + 1)
+    else:
+        bin_edges = np.linspace(lo - 0.5, lo + 0.5, nbins + 1)
+
     if color_of is None:
         color_of = lambda v: _goodness(v, lo, hi, good_direction)
 
     # left: distribution histogram
     reasons = sorted({r for r in (o.rejection_reason for o in rejected) if r})
     if len(rej_vals[~np.isnan(rej_vals)]) > 0:
-        ax_hist.hist(rej_vals, bins=40, alpha=0.35, color="#d3d3d3", label="rejected")
+        ax_hist.hist(rej_vals, bins=bin_edges, align="left", alpha=0.35,
+                     color="#d3d3d3", label="rejected")
     for reason in reasons:
         reason_vals = np.array([
             value_of(_feature_value(o, feature_attr)) for o in rejected
@@ -322,9 +360,11 @@ def _plot_metric_row(ax_hist, ax_scatter, accepted, rejected, selected,
         ])
         reason_vals = reason_vals[~np.isnan(reason_vals)]
         color = REJECT_COLORS.get(reason, FALLBACK_REJECT_COLOR)
-        ax_hist.hist(reason_vals, bins=40, alpha=0.6, color=color, label=reason)
+        ax_hist.hist(reason_vals, bins=bin_edges, align="left", alpha=0.6,
+                     color=color, label=reason)
     if len(acc_vals[~np.isnan(acc_vals)]) > 0:
-        ax_hist.hist(acc_vals, bins=40, alpha=0.6, color="#2a9d8f", label="accepted")
+        ax_hist.hist(acc_vals, bins=bin_edges, align="left", alpha=0.6,
+                     color="#2a9d8f", label="accepted")
     for s in selected:
         v = value_of(_feature_value(s, feature_attr))
         if not np.isnan(v):
@@ -521,68 +561,144 @@ def _curated_bad_examples(rejected, feature_attr, good_direction, k):
     return picked
 
 
-def plot_bad_examples(accepted, rejected, selected, output_dir, n_per_feature=BAD_EXAMPLES_PER_FEATURE):
-    """One bad_examples image per feature: frames that were filtered out.
+def _prob_sample_low_quality(pool, feature_attr, good_direction, k, rng=None):
+    """Sample k frames with probability weighted by badness (worst most likely).
 
-    Only observations rejected by the pipeline are shown. The worst frame is
-    always included and the remaining slots are filled worst-first with frames
-    that are visually distinct from the ones already shown. If fewer than
-    n_per_feature were filtered out, the empty slots are drawn as placeholder
-    tiles so the layout stays consistent.
+    ``pool`` is a list of observations. Frames are drawn without replacement
+    and each frame's weight is its relative badness on ``feature_attr``
+    (1.0 = the worst frame in the pool, 0.0 = the best), so the lowest-quality
+    frames are picked with the highest likelihood. Images are not loaded, so
+    near-duplicate consecutive frames may co-occur — that is the point of a
+    probability sample.
+    """
+    scored = [(o, _feature_value(o, feature_attr)) for o in pool]
+    scored = [(o, v) for o, v in scored if not np.isnan(v)]
+    if not scored:
+        return []
+    vals = np.array([v for _, v in scored])
+    lo, hi = float(vals.min()), float(vals.max())
+    if hi > lo:
+        good = np.array([_goodness(v, lo, hi, good_direction) for v in vals])
+    else:
+        good = np.full(len(vals), 0.5)
+    badness = 1.0 - good
+    weights = badness + 1e-6  # never a zero-probability pick
+    weights /= weights.sum()
+    if rng is None:
+        rng = np.random.default_rng()
+    k = min(k, len(scored))
+    idx = rng.choice(len(scored), size=k, replace=False, p=weights)
+    return [scored[i] for i in idx]
+
+
+def _save_example_row(examples, n_per_feature, attr, title, out_path, reported_of=None):
+    """Render one row of example thumbnails to ``out_path``.
+
+    Each thumbnail gets the feature overlay, a coolwarm frame whose colour
+    tracks reported goodness (warm = good, cold = bad) and a label with the
+    frame id, reported value and rejection reason (accepted frames show
+    "accepted"). Empty slots become placeholder tiles.
+    """
+    if reported_of is None:
+        reported_of = lambda v: _report_value(attr, v)
+    n_avail = len(examples)
+    if n_avail:
+        vals = np.array([reported_of(v) for _, v in examples])
+        lo, hi = float(vals.min()), float(vals.max())
+    else:
+        lo, hi = 0.0, 1.0
+
+    fig, axes = plt.subplots(1, n_per_feature, figsize=(3.4 * n_per_feature, 3.8))
+    if not isinstance(axes, np.ndarray):
+        axes = np.array([axes])
+
+    for col in range(n_per_feature):
+        ax = axes[col]
+        ax.axis("off")
+        if col >= n_avail:
+            ax.imshow(np.full((64, 64, 3), 240, dtype=np.uint8))
+            ax.set_title("no filtered\nframe", fontsize=8, color="gray")
+            continue
+        obs, value = examples[col]
+        overlay = _feature_overlay(obs, attr)
+        reason = obs.rejection_reason or "accepted"
+        if overlay is None:
+            ax.imshow(np.full((64, 64, 3), 210, dtype=np.uint8))
+            ax.set_title(f"#{obs.id}\n{reason}", fontsize=8)
+            continue
+        ax.imshow(overlay)
+
+        # frame border color tracks goodness: warm = good, cold = bad
+        reported = reported_of(value)
+        frac = _goodness(reported, lo, hi, 1)
+        color = WARM_COLD_CMAP(frac)
+        ax.add_patch(Rectangle(
+            (0, 0), 1, 1, transform=ax.transAxes,
+            fill=False, edgecolor=color, linewidth=4,
+        ))
+        ax.set_title(f"#{obs.id} {_format_tick(reported)}\n{reason}", fontsize=8)
+
+    fig.suptitle(title, fontsize=12)
+    fig.tight_layout(rect=(0, 0, 1, 0.92))
+    out_path = Path(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  Saved {out_path}")
+
+
+def plot_bad_examples(accepted, rejected, selected, output_dir, n_per_feature=BAD_EXAMPLES_PER_FEATURE):
+    """Per-feature example-frame images, split by pipeline stage.
+
+    ``bad_examples/pre-filter_stage/`` — raw pre-filter stats:
+      ``<attr>_filtered.png``      up to 5 frames actually rejected *for that
+                                   feature's reason* (worst-first, curated to
+                                   stay visually distinct). Only produced when
+                                   the reason fired at least once.
+      ``lower_<attr>_quality.png`` when the reason never fired: the
+                                   lowest-quality *accepted* frames per that
+                                   stat, probability-sampled (worst = highest
+                                   likelihood). Vincent soft stats that can
+                                   never reject always take this form.
+    ``bad_examples/selection_stage/`` — quality scores:
+      ``lower_<attr>_quality.png`` lowest-quality accepted frames per quality
+                                   score, probability-sampled.
     """
     output_dir = Path(output_dir)
-    for group, features, prefix in [
-        ("raw", RAW_FEATURES, "raw_filter_"),
-        ("quality", QUALITY_FEATURES, "quality_score_"),
-    ]:
-        out_dir = output_dir / "bad_examples"
-        out_dir.mkdir(parents=True, exist_ok=True)
-        for attr, label, good_direction in features:
-            examples = _curated_bad_examples(rejected, attr, good_direction, n_per_feature)
-            n_avail = len(examples)
-            if n_avail:
-                vals = np.array([_report_value(attr, v) for _, v in examples])
-                lo, hi = float(vals.min()), float(vals.max())
-            else:
-                lo, hi = 0.0, 1.0
+    rng = np.random.default_rng(0)
 
-            fig, axes = plt.subplots(1, n_per_feature, figsize=(3.4 * n_per_feature, 3.8))
-            if not isinstance(axes, np.ndarray):
-                axes = np.array([axes])
+    pre_dir = output_dir / "bad_examples" / "pre-filter_stage"
+    sel_dir = output_dir / "bad_examples" / "selection_stage"
+    pre_dir.mkdir(parents=True, exist_ok=True)
+    sel_dir.mkdir(parents=True, exist_ok=True)
 
-            for col in range(n_per_feature):
-                ax = axes[col]
-                ax.axis("off")
-                if col >= n_avail:
-                    ax.imshow(np.full((64, 64, 3), 240, dtype=np.uint8))
-                    ax.set_title("no filtered\nframe", fontsize=8, color="gray")
-                    continue
-                obs, value = examples[col]
-                overlay = _feature_overlay(obs, attr)
-                reason = obs.rejection_reason or "rejected"
-                if overlay is None:
-                    ax.imshow(np.full((64, 64, 3), 210, dtype=np.uint8))
-                    ax.set_title(f"#{obs.id}\n{reason}", fontsize=8)
-                    continue
-                ax.imshow(overlay)
+    for attr, label, good_direction in RAW_FEATURES:
+        reasons = _FEATURE_REASONS.get(attr, ())
+        reason_pool = [o for o in rejected if o.rejection_reason in reasons] if reasons else []
+        if reason_pool:
+            examples = _curated_bad_examples(reason_pool, attr, good_direction, n_per_feature)
+            if examples:
+                _save_example_row(
+                    examples, n_per_feature, attr,
+                    f"Filtered-out examples: {label} — pre-filter raw stat",
+                    pre_dir / f"{attr}_filtered.png",
+                )
+        else:
+            examples = _prob_sample_low_quality(
+                accepted, attr, good_direction, n_per_feature, rng=rng)
+            if examples:
+                _save_example_row(
+                    examples, n_per_feature, attr,
+                    f"Lowest-quality accepted frames: {label} — pre-filter raw stat",
+                    pre_dir / f"lower_{attr}_quality.png",
+                )
 
-                # frame border color tracks goodness: warm = good, cold = bad
-                reported = _report_value(attr, value)
-                frac = _goodness(reported, lo, hi, 1)
-                color = WARM_COLD_CMAP(frac)
-                ax.add_patch(Rectangle(
-                    (0, 0), 1, 1, transform=ax.transAxes,
-                    fill=False, edgecolor=color, linewidth=4,
-                ))
-                ax.set_title(f"#{obs.id} {_format_tick(reported)}\n{reason}", fontsize=8)
-
-            fig.suptitle(
-                f"Filtered-out examples: {label} — "
-                f"{'pre-filter raw stat' if group == 'raw' else 'quality score'}",
-                fontsize=12,
+    for attr, label, good_direction in QUALITY_FEATURES:
+        examples = _prob_sample_low_quality(
+            accepted, attr, good_direction, n_per_feature, rng=rng)
+        if examples:
+            _save_example_row(
+                examples, n_per_feature, attr,
+                f"Lowest-quality accepted frames: {label} — quality score",
+                sel_dir / f"lower_{attr}_quality.png",
             )
-            fig.tight_layout(rect=(0, 0, 1, 0.92))
-            path = out_dir / f"{prefix}{attr}.png"
-            fig.savefig(path, dpi=150, bbox_inches="tight")
-            plt.close(fig)
-            print(f"  Saved {path}")
