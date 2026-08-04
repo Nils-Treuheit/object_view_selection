@@ -15,6 +15,22 @@ from .pre_filter_plots import plot_pre_filter_distributions
 from .quality_score_plots.violins import plot_quality_violins
 
 
+def _indexed_files(dirpath, suffix=".png"):
+    """Map integer observation ids to their actual file paths.
+
+    The dataset stores images as zero-padded stems (``00000.png``), so
+    ``f"{oid}.png"`` is wrong. Scanning the directory once maps every id to
+    its real file regardless of padding.
+    """
+    out = {}
+    d = Path(dirpath)
+    if d.is_dir():
+        for p in d.glob(f"*{suffix}"):
+            if p.stem.isdigit():
+                out[int(p.stem)] = p
+    return out
+
+
 def _load_from_disk(input_dir):
     """Rebuild plot arguments from saved pipeline outputs."""
     input_dir = Path(input_dir)
@@ -42,6 +58,10 @@ def _load_from_disk(input_dir):
     pool_ids = report.get("selection_pool_ids", report["accepted_ids"])
     quality_scores = np.array([id_to_quality[oid] for oid in pool_ids])
 
+    data_root = Path(report.get("data_root", ""))
+    img_map = _indexed_files(data_root / "images")
+    msk_map = _indexed_files(data_root / "masks")
+
     class _MockMetrics:
         def __init__(self, d):
             for k, v in d.items():
@@ -53,9 +73,8 @@ def _load_from_disk(input_dir):
             self.quality = quality
             self.metrics = _MockMetrics(metrics_dict)
             self.rejection_reason = rejection_reason
-            data_root = Path(report.get("data_root", ""))
-            self.image_path = data_root / "images" / f"{oid}.png"
-            self.mask_path = data_root / "masks" / f"{oid}.png"
+            self.image_path = img_map.get(oid)
+            self.mask_path = msk_map.get(oid)
 
     accepted = [
         _MockObs(oid, id_to_quality[oid], id_to_metrics[oid])

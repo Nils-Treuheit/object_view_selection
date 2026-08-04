@@ -378,10 +378,17 @@ def test_feature_overview_plots_saved():
         check(overview.is_dir(), "data_set_overview/ exists")
         check(bad.is_dir(), "bad_examples/ exists")
 
-        # two overview variants per feature (fixed + relative) and one
-        # bad_examples image per feature, prefixed raw_filter_ / quality_score_
-        for name in ["raw_filter_laplacian", "raw_filter_area_ratio",
-                     "raw_filter_vincent_boundary_blur_variance",
+        # bounded features get both variants (fixed + relative); unbounded
+        # counting stats (laplacian, tenengrad, boundary-blur variance) get
+        # the relative plot only. One bad_examples image per feature.
+        for name in ["raw_filter_laplacian", "raw_filter_tenengrad",
+                     "raw_filter_vincent_boundary_blur_variance"]:
+            check(not (overview / f"{name}_fixed.png").exists(),
+                  f"no fixed variant for unbounded {name}")
+            check((overview / f"{name}_relative.png").exists(),
+                  f"data_set_overview/{name}_relative.png saved")
+            check((bad / f"{name}.png").exists(), f"bad_examples/{name}.png saved")
+        for name in ["raw_filter_area_ratio",
                      "quality_score_blur", "quality_score_occlusion", "quality_score_score"]:
             check((overview / f"{name}_fixed.png").exists(), f"data_set_overview/{name}_fixed.png saved")
             check((overview / f"{name}_relative.png").exists(), f"data_set_overview/{name}_relative.png saved")
@@ -397,8 +404,8 @@ def test_feature_overview_plots_saved():
 
 
 def test_bad_examples_select_rejected_only():
-    """bad_examples selects only filtered-out frames, worst-first, capped at 5."""
-    from plotting_process.feature_plots import _worst_rejected
+    """bad_examples selects only filtered-out frames, worst first, capped at 5."""
+    from plotting_process.feature_plots import _curated_bad_examples
 
     embeddings, qs, sel_idx = _make_synthetic_data(30, 8, 4)
     accepted, rejected, selected = _make_mock_observations(embeddings, qs, sel_idx)
@@ -406,15 +413,42 @@ def test_bad_examples_select_rejected_only():
     for i, o in enumerate(rejected):
         o.metrics.area_ratio = float(i + 1) / 10.0
 
-    picked = _worst_rejected(rejected, "area_ratio", 1, 5)
+    picked = _curated_bad_examples(rejected, "area_ratio", 1, 5)
     check(len(picked) == 5, f"capped at 5 (got {len(picked)})")
     check(all(o in rejected for o, _ in picked), "only filtered-out frames are selected")
-    vals = [v for _, v in picked]
-    check(vals == sorted(vals), "worst (lowest) frames come first")
+    # the very worst frame is always the first pick
+    check(picked[0][0].id == rejected[0].id, "absolute worst frame comes first")
 
-    picked_all = _worst_rejected(rejected, "area_ratio", 1, 100)
+    picked_all = _curated_bad_examples(rejected, "area_ratio", 1, 100)
     check(len(picked_all) == len(rejected),
           f"k > available returns all (got {len(picked_all)})")
+
+
+def test_bad_examples_curated_avoid_near_duplicates():
+    """Curated picks skip a run of near-identical frames when distinct ones exist."""
+    from plotting_process.feature_plots import _curated_bad_examples
+
+    n = 10
+    rng = np.random.RandomState(7)
+    rejected = []
+    for i in range(n):
+        o = _MockObs(i, 0.0, {"area_ratio": (i + 1) / 10.0})
+        o.rejection_reason = "area"
+        rejected.append(o)
+
+    # ids 0-2 share the same image, ids 3-9 all share a different image
+    img_a = np.full((64, 64, 3), 10, dtype=np.uint8)
+    img_b = np.full((64, 64, 3), 200, dtype=np.uint8)
+    for i, o in enumerate(rejected):
+        o.image = img_a if i < 3 else img_b
+
+    picked = _curated_bad_examples(rejected, "area_ratio", 1, 5)
+    picked_ids = [o.id for o, _ in picked]
+    check(len(picked_ids) == 5, f"picked 5 (got {len(picked_ids)})")
+    # a pure worst-first run would give ids [0,1,2,3,4]; curation must not
+    # return three identical-looking frames
+    check(picked_ids != [0, 1, 2, 3, 4],
+          f"curated picks avoid a near-identical run (got {picked_ids})")
 
 
 def test_bad_examples_placeholders_when_few_rejected():
@@ -434,6 +468,54 @@ def test_bad_examples_placeholders_when_few_rejected():
         check((pre / "raw_filter_laplacian.png").exists(), "raw bad_examples saved")
         check((pre / "quality_score_score.png").exists(), "quality bad_examples saved")
         check((pre / "raw_filter_laplacian.png").stat().st_size > 1024, "bad_examples has content")
+
+
+def test_report_value_inverts_lower_is_better_features():
+    """_report_value reports 1 - value for lower-is-better features."""
+    from plotting_process.feature_plots import _report_value, _FEATURE_DIRECTION
+
+    for attr, gd in [("border_ratio", -1), ("edge_ratio", -1),
+                     ("hand_overlap", -1), ("vincent_artifact_fraction", -1)]:
+        check(_FEATURE_DIRECTION[attr] == -1, f"{attr} is lower-is-better")
+        check(abs(_report_value(attr, 0.06) - 0.94) < 1e-9, f"{attr} reported as 1 - value")
+        check(_report_value(attr, 0.0) == 1.0, f"{attr} best case reports 1.0")
+
+    for attr, gd in [("laplacian", 1), ("area_ratio", 1), ("score", 1)]:
+        check(_FEATURE_DIRECTION.get(attr, 1) == 1, f"{attr} is higher-is-better")
+        check(abs(_report_value(attr, 0.06) - 0.06) < 1e-9, f"{attr} reported unchanged")
+
+
+def test_format_tick_never_uses_scientific_notation():
+    """_format_tick writes numbers fully (no e-notation)."""
+    from plotting_process.feature_plots import _format_tick
+
+    check(_format_tick(4571.75) == "4571.75", "laplacian tick fully written")
+    check(_format_tick(50.9) == "50.9", "large-ish value written out")
+    check(_format_tick(0.064) == "0.064", "small fraction written out")
+    check(_format_tick(1.0) == "1", "whole number has no trailing zeros")
+    check(_format_tick(0.0) == "0", "zero")
+    check("e+" not in _format_tick(123456.789), "no e+ notation for big values")
+
+
+def test_bad_examples_unhashable_observations():
+    """_curated_bad_examples works with unhashable observations (real Observation)."""
+    from dataclasses import dataclass, field
+    from plotting_process.feature_plots import _curated_bad_examples
+
+    @dataclass
+    class _UnhashableObs:
+        id: int
+        image: object = None
+        rejection_reason: str = "area"
+
+        @property
+        def metrics(self):
+            return _MockMetrics(area_ratio=float(self.id + 1) / 10.0)
+
+    rejected = [_UnhashableObs(i) for i in range(6)]
+    picked = _curated_bad_examples(rejected, "area_ratio", 1, 5)
+    check(len(picked) == 5, f"unhashable observations picked 5 (got {len(picked)})")
+    check(picked[0][0].id == 0, "worst unhashable frame first")
 
 
 def test_dataset_overview_hist_xlim():
@@ -465,6 +547,30 @@ def test_dataset_overview_hist_xlim():
     plt.close(fig)
 
 
+def test_plot_metric_row_colorbar_ticks():
+    """colorbar_ticks replace the default tick labels on the colourbar."""
+    from matplotlib import pyplot as plt
+    from matplotlib.colors import Normalize
+    from plotting_process.feature_plots import _plot_metric_row
+
+    embeddings, qs, sel_idx = _make_synthetic_data(30, 8, 4)
+    accepted, rejected, selected = _make_mock_observations(embeddings, qs, sel_idx)
+
+    fig, (ax_hist, ax_scatter) = plt.subplots(1, 2)
+    _plot_metric_row(
+        ax_hist, ax_scatter, accepted, rejected, selected,
+        "area_ratio", "Area Ratio", 1,
+        plt.cm.viridis, Normalize(0.0, 1.0), "goodness (relative scale)",
+        color_of=lambda v: v,
+        colorbar_ticks=[(0.0, "0"), (0.5, "0.5"), (1.0, "1")],
+    )
+    cbar_ax = fig.axes[-1]
+    labels = [t.get_text() for t in cbar_ax.get_yticklabels()]
+    check("0" in labels and "1" in labels,
+          f"colorbar shows custom raw-value ticks (got {labels})")
+    plt.close(fig)
+
+
 def test_dataset_overview_inverts_flipped_features():
     """Goodness is 1.0=good / 0.0=bad even for lower-is-better features."""
     from plotting_process.feature_plots import _goodness
@@ -475,6 +581,42 @@ def test_dataset_overview_inverts_flipped_features():
     # higher-is-better: a high raw value (good) maps to goodness ~1.0
     check(_goodness(1.0, 0.0, 1.0, 1) == 1.0, "laplacian=max (good) -> goodness 1")
     check(_goodness(0.0, 0.0, 1.0, 1) == 0.0, "laplacian=min (bad) -> goodness 0")
+
+
+def test_fixed_scale_uses_absolute_value_for_bounded_features():
+    """Fixed 0..1 plots colour bounded features by their absolute value."""
+    from plotting_process.feature_plots import _abs_goodness, BOUNDED_FEATURES
+
+    for attr in ["blur", "occlusion", "confidence", "score", "area_ratio"]:
+        check(attr in BOUNDED_FEATURES, f"{attr} is a bounded feature")
+    for attr in ["laplacian", "tenengrad", "vincent_boundary_blur_variance"]:
+        check(attr not in BOUNDED_FEATURES, f"{attr} is unbounded")
+
+    # higher-is-better: the colour equals the raw value, so a 0.99 quality dot
+    # is coloured near the top (warm end) of the fixed 0..1 colourbar
+    check(abs(_abs_goodness(0.99, 1) - 0.99) < 1e-9, "quality 0.99 -> colour 0.99")
+    check(abs(_abs_goodness(0.2, 1) - 0.2) < 1e-9, "quality 0.2 -> colour 0.2")
+    # lower-is-better (border_ratio): a small bad value -> large goodness
+    check(abs(_abs_goodness(0.06, -1) - 0.94) < 1e-9, "border_ratio 0.06 -> colour 0.94")
+    check(_abs_goodness(1.5, 1) == 1.0, "value > 1 clips to 1.0")
+    check(_abs_goodness(-0.5, 1) == 0.0, "value < 0 clips to 0.0")
+
+
+def test_relative_colorbar_ticks_in_raw_units():
+    """Relative colourbar ticks map goodness positions back to raw values."""
+    from plotting_process.feature_plots import _raw_at_goodness
+
+    lo, hi, gmin, gmax = 0.0, 1.0, 0.0, 1.0
+    check(abs(_raw_at_goodness(0.0, lo, hi, gmin, gmax, 1) - 0.0) < 1e-9,
+          "goodness 0 (gd=1) -> raw lo")
+    check(abs(_raw_at_goodness(1.0, lo, hi, gmin, gmax, 1) - 1.0) < 1e-9,
+          "goodness 1 (gd=1) -> raw hi")
+
+    # lower-is-better: goodness 1 = best = lowest raw value
+    check(abs(_raw_at_goodness(1.0, lo, hi, gmin, gmax, -1) - 0.0) < 1e-9,
+          "goodness 1 (gd=-1) -> raw lo (best)")
+    check(abs(_raw_at_goodness(0.0, lo, hi, gmin, gmax, -1) - 1.0) < 1e-9,
+          "goodness 0 (gd=-1) -> raw hi (worst)")
 
 
 def test_feature_plots_warm_cold_colormap():
