@@ -575,6 +575,54 @@ def test_bad_examples_filtered_reason_scoped():
               "no lower_*_quality when the reason fired")
 
 
+def test_bad_examples_status_lines_and_rel_range():
+    """Status lines follow the per-stage format and borders use the rel range."""
+    from unittest import mock
+    from plotting_process.feature_plots import plot_bad_examples, REL_CMAP, _goodness
+
+    accepted = [_MockObs(i, 0.8, {"area_ratio": 0.9, "border_ratio": 0.2, "laplacian": 50.0})
+                for i in range(20)]
+    rejected = []
+    for i in range(2):
+        o = _MockObs(100 + i, 0.0, {"area_ratio": 0.01, "laplacian": 10.0})
+        o.rejection_reason = "small_object"
+        rejected.append(o)
+
+    with mock.patch("plotting_process.feature_plots._save_example_row") as mock_save:
+        with tempfile.TemporaryDirectory() as tmp:
+            plot_bad_examples(accepted, rejected, [], Path(tmp))
+        calls = {Path(c.args[-1]).name: c for c in mock_save.call_args_list}
+        by_path = {str(Path(c.args[-1])): c for c in mock_save.call_args_list}
+
+    # filtered stage: rejected - <reason>, with the id/QoS format applied later
+    c = calls["area_ratio_filtered.png"]
+    obs = c.args[0][0][0]
+    status = c.kwargs["status_line"](obs, 0.01)
+    check(status == f"rejected - {obs.rejection_reason}", f"filtered status line (got '{status}')")
+
+    # pre-filter fallback (accepted frames): accepted - <feature label>
+    c = calls["lower_border_ratio_quality.png"]
+    acc = c.args[0][0][0]
+    status = c.kwargs["status_line"](acc, 0.8)
+    check(status == "accepted - Border-Free Ratio", f"pre-filter fallback status line (got '{status}')")
+
+    # selection stage: accepted but not selected
+    sel_calls = [cc for path, cc in by_path.items() if "selection_stage" in path]
+    check(len(sel_calls) > 0, "selection-stage images produced")
+    status = sel_calls[0].kwargs["status_line"](accepted[0], 0.5)
+    check(status == "accepted but not selected", f"selection-stage status line (got '{status}')")
+
+    # rel_range spans the reported values of ALL samples (accepted + rejected)
+    lo, hi = calls["area_ratio_filtered.png"].kwargs["rel_range"]
+    check(lo <= 0.01 and hi >= 0.9, f"area_ratio rel range covers all samples (got {(lo, hi)})")
+    lo, hi = calls["lower_border_ratio_quality.png"].kwargs["rel_range"]
+    check(lo <= 0.8 and hi >= 0.8 and lo <= hi,
+          f"border_ratio rel range covers accepted values (got {(lo, hi)})")
+    # border colour is the viridis colour of the relative score
+    color = REL_CMAP(_goodness(0.8, 0.0, 1.0, 1))
+    check(len(color) == 4, "border colour from the viridis cmap")
+
+
 def test_prob_sample_low_quality_prefers_worst():
     """Probability sampling favours the lowest-quality frames."""
     from plotting_process.feature_plots import _prob_sample_low_quality
@@ -596,29 +644,43 @@ def test_prob_sample_low_quality_prefers_worst():
 
 
 def test_histogram_bars_centered_on_bin_values():
-    """Histogram bars are centred on the bin values (0.0 bar centres on 0.0)."""
+    """Bounded-feature histograms centre bars on the fixed 0.0..1.0 grid."""
     from matplotlib import pyplot as plt
     from matplotlib.colors import Normalize
     from plotting_process.feature_plots import _plot_metric_row
 
-    embeddings, qs, sel_idx = _make_synthetic_data(30, 8, 4)
-    accepted, rejected, selected = _make_mock_observations(embeddings, qs, sel_idx)
+    fixed_bins = np.linspace(0.0, 1.0 + 0.025, 42)
+    # accepted values span the full 0..1 range; one rejected frame sits at 0.0
+    accepted = [_MockObs(i, 0.5, {"area_ratio": float(i) / 9.0}) for i in range(10)]
+    rej = _MockObs(100, 0.0, {"area_ratio": 0.0})
+    rej.rejection_reason = "small_object"
+    rejected = [rej]
 
     fig, (ax_hist, ax_scatter) = plt.subplots(1, 2)
-    _plot_metric_row(ax_hist, ax_scatter, accepted, rejected, selected,
+    _plot_metric_row(ax_hist, ax_scatter, accepted, rejected, [],
                      "area_ratio", "Area Ratio", 1,
-                     plt.cm.coolwarm, Normalize(0.0, 1.0), "goodness")
+                     plt.cm.coolwarm, Normalize(0.0, 1.0), "goodness",
+                     bins=fixed_bins)
     centers = np.array(sorted(p.get_x() + p.get_width() / 2.0 for p in ax_hist.patches))
     check(len(centers) > 0, "histogram produced bars")
-    # the rejected mocks sit at value 0.0 -> their bar must be centred at 0.0
-    check(abs(centers.min()) < 1e-6, f"0.0 bar centred on 0.0 (got {centers.min():.6f})")
-    # every bar centre must sit on the value grid anchored at 0.0
-    d = np.diff(centers)
-    w = d[d > 1e-9].min() if (d > 1e-9).any() else None
-    if w is not None:
-        frac = (centers - centers.min()) / w
-        check(np.allclose(frac, np.round(frac), atol=1e-6),
-              "all bars sit on the value grid anchored at 0.0")
+    w = 1.0 / 40
+    # every bar sits on the 0.0, 0.025, ..., 1.0 grid
+    check(np.allclose(centers / w, np.round(centers / w), atol=1e-6),
+          "all bars centred on the 0..1 value grid")
+    check(abs(centers.min()) < 1e-9, f"0.0 bar centred on 0.0 (got {centers.min():.6f})")
+    check(abs(centers.max() - 1.0) < 1e-9, f"1.0 bar centred on 1.0 (got {centers.max():.6f})")
+    plt.close(fig)
+
+    # without explicit bins (unbounded features) the grid is data-driven but
+    # still centred on the data minimum (the rejected 0.0 frame)
+    embeddings, qs, sel_idx = _make_synthetic_data(30, 8, 4)
+    accepted2, rejected2, _ = _make_mock_observations(embeddings, qs, sel_idx)
+    fig, (ax_hist, ax_scatter) = plt.subplots(1, 2)
+    _plot_metric_row(ax_hist, ax_scatter, accepted2, rejected2, [],
+                     "area_ratio", "Area Ratio", 1,
+                     plt.cm.coolwarm, Normalize(0.0, 1.0), "goodness")
+    centers2 = np.array(sorted(p.get_x() + p.get_width() / 2.0 for p in ax_hist.patches))
+    check(abs(centers2.min()) < 1e-6, f"data-driven bars centred at the data min (got {centers2.min():.6f})")
     plt.close(fig)
 
 
@@ -706,21 +768,54 @@ def test_fixed_scale_uses_absolute_value_for_bounded_features():
     check(_abs_goodness(-0.5, 1) == 0.0, "value < 0 clips to 0.0")
 
 
-def test_relative_colorbar_ticks_in_raw_units():
-    """Relative colourbar ticks map goodness positions back to raw values."""
-    from plotting_process.feature_plots import _raw_at_goodness
+def test_relative_colorbar_range_rounded():
+    """Relative colourbar range rounds min down / max up to 2 decimal places."""
+    from plotting_process.feature_plots import _round_range
 
-    lo, hi, gmin, gmax = 0.0, 1.0, 0.0, 1.0
-    check(abs(_raw_at_goodness(0.0, lo, hi, gmin, gmax, 1) - 0.0) < 1e-9,
-          "goodness 0 (gd=1) -> raw lo")
-    check(abs(_raw_at_goodness(1.0, lo, hi, gmin, gmax, 1) - 1.0) < 1e-9,
-          "goodness 1 (gd=1) -> raw hi")
+    lo, hi = _round_range(0.0042, 0.9698)
+    check(lo == 0.0, f"min rounded down to 2 dp (got {lo})")
+    check(hi == 0.97, f"max rounded up to 2 dp (got {hi})")
 
-    # lower-is-better: goodness 1 = best = lowest raw value
-    check(abs(_raw_at_goodness(1.0, lo, hi, gmin, gmax, -1) - 0.0) < 1e-9,
-          "goodness 1 (gd=-1) -> raw lo (best)")
-    check(abs(_raw_at_goodness(0.0, lo, hi, gmin, gmax, -1) - 1.0) < 1e-9,
-          "goodness 0 (gd=-1) -> raw hi (worst)")
+    lo, hi = _round_range(6.486, 50.938)
+    check(lo == 6.48 and hi == 50.94, f"2-dp outward rounding (got {lo}, {hi})")
+
+    # degenerate all-identical values still produce a usable range
+    lo, hi = _round_range(0.5, 0.5)
+    check(hi > lo, f"degenerate range widened (got {lo}, {hi})")
+
+
+def test_relative_colorbar_ticks_max_3_decimals():
+    """Relative colourbar tick labels never exceed 3 decimal places."""
+    from plotting_process.feature_plots import _format_relative_tick
+
+    for v in [0.0, 0.5, 0.475, 0.975, 50.938, 0.0001]:
+        label = _format_relative_tick(v)
+        check("e+" not in label and "e-" not in label, f"{label} not e-notation")
+        frac = label.split(".")[1] if "." in label else ""
+        check(len(frac) <= 3, f"{label} has at most 3 decimal places")
+    check(_format_relative_tick(0.5) == "0.5", "trailing zeros trimmed")
+
+
+def test_relative_colorbar_range_rounded_and_ticks():
+    """plot_dataset_overview passes the rounded range to the relative colourbar."""
+    from unittest import mock
+    from plotting_process import feature_plots
+
+    embeddings, qs, sel_idx = _make_synthetic_data(30, 8, 4)
+    accepted, rejected, selected = _make_mock_observations(embeddings, qs, sel_idx)
+
+    with mock.patch.object(feature_plots, "_plot_metric_row") as mr:
+        with tempfile.TemporaryDirectory() as tmp:
+            feature_plots.plot_dataset_overview(accepted, rejected, selected,
+                                                Path(tmp) / "plots")
+        rel_calls = [c for c in mr.call_args_list
+                     if c.kwargs.get("colorbar_ticks") is not None]
+        check(len(rel_calls) > 0, "relative variants produced with ticks")
+        positions = [pos for pos, _ in rel_calls[0].kwargs["colorbar_ticks"]]
+        check(sorted(positions) == [0.0, 0.5, 1.0], f"tick positions on goodness scale (got {positions})")
+        for _, label in rel_calls[0].kwargs["colorbar_ticks"]:
+            frac = label.split(".")[1] if "." in label else ""
+            check(len(frac) <= 3, f"tick label {label} has <= 3 decimals")
 
 
 def test_feature_plots_warm_cold_colormap():

@@ -20,7 +20,9 @@ Output layout (inside the pre-filter plots dir):
 
 Each data_set_overview image has a distribution histogram on the left (x-axis
 fixed to [-0.05, 1.05] when the feature is bounded to [0, 1]) and the feature
-value over the frame sequence on the right.
+value over the frame sequence on the right. Histogram bars are centred on the
+bin values: bounded features use a fixed 0..1 grid so every bar is centre
+aligned from 0.0 all the way to 1.0 (bars centred at 0.0, 0.025, ..., 1.0).
 
 Reported values use a persistent meaning too: for the lower-is-better raw
 stats (border ratio, edge ratio, hand overlap, artifact fraction) the plots
@@ -38,13 +40,17 @@ differ in the colourbar scale:
                   exactly. Unbounded counting stats (Laplacian, Tenengrad,
                   boundary-blur variance) have no fixed 0..1 meaning and get
                   the relative plot only.
-  *_relative.png  colourbar adjusted to this dataset's observed value range
-                  and ticked in the reported units of the feature (1 - value
-                  for the lower-is-better stats), so it reads as "relative to
-                  this dataset".
+  *_relative.png  colourbar adjusted to this dataset's observed value range,
+                  with the min rounded *down* and the max rounded *up* to the
+                  second decimal place, and ticked in the reported units of
+                  the feature (1 - value for the lower-is-better stats), at
+                  most 3 decimal places, so it reads as "relative to this
+                  dataset".
 
 Neither title nor colourbar carries a "(fixed 0..1)" / "(relative …)" suffix;
-the colourbar is just the numbers, written out in full (no e-notation).
+the colourbar is just the numbers, written out in full (no e-notation). The
+overview titles are ``<Label> (statistical pre-filter)`` for the raw stats and
+``<Label> Score`` for the quality scores.
 
 The pre-filter_stage images only ever show frames that were actually filtered
 out for that feature's own reason. The worst frame is always included; the
@@ -55,6 +61,14 @@ fired, and for every quality score, the image instead probability-samples the
 lowest-quality *accepted* frames (worst = highest likelihood), so these plots
 show what low quality looks like without pretending those frames were
 filtered.
+
+Every thumbnail border is coloured with the *viridis* colour of the relative
+score over the min/max of all samples — the same scale as the relative
+``data_set_overview`` colourbar — and each thumbnail is labelled with a
+status line and ``#<frame id> | QS: <reported value>``: filtered frames show
+``rejected - <reason>``, pre-filter lower-quality frames show
+``accepted - <feature label>`` and selection-stage frames show
+``accepted but not selected``.
 """
 
 from pathlib import Path
@@ -223,6 +237,25 @@ def _format_tick(value):
     return f"{value:.6f}".rstrip("0").rstrip(".")
 
 
+def _round_range(lo, hi):
+    """Round the data min down and max up to the second decimal place.
+
+    The relative colourbar scale uses this clean outward-rounded range instead
+    of the exact observed min/max, so the scale is stable across runs.
+    """
+    lo_r = np.floor(lo * 100.0) / 100.0
+    hi_r = np.ceil(hi * 100.0) / 100.0
+    if hi_r <= lo_r:
+        lo_r = np.floor((lo - 0.01) * 100.0) / 100.0
+        hi_r = np.ceil((hi + 0.01) * 100.0) / 100.0
+    return float(lo_r), float(hi_r)
+
+
+def _format_relative_tick(value):
+    """Relative colourbar tick: fully written, at most 3 decimal places."""
+    return _format_tick(round(value, 3))
+
+
 def _goodness(value, lo, hi, good_direction):
     """Map a raw feature value to [0, 1] goodness where 1.0 = always good.
 
@@ -307,17 +340,10 @@ def _feature_overlay(obs, feature_attr):
 # --------------------------------------------------------------------------- #
 
 
-def _raw_at_goodness(g, lo, hi, gmin, gmax, good_direction):
-    """Raw feature value that a given relative goodness corresponds to."""
-    if good_direction == 1:
-        return lo + (g - gmin) / (gmax - gmin) * (hi - lo)
-    return lo + (1.0 - g) * (hi - lo)
-
-
 def _plot_metric_row(ax_hist, ax_scatter, accepted, rejected, selected,
                      feature_attr, label, good_direction, cmap, norm,
                      colorbar_label, color_of=None, colorbar_ticks=None,
-                     value_of=None):
+                     value_of=None, bins=None):
     sel_ids = {s.id for s in selected}
 
     if value_of is None:
@@ -338,12 +364,19 @@ def _plot_metric_row(ax_hist, ax_scatter, accepted, rejected, selected,
     # bars are centred on the distribution bins: matplotlib's align='left'
     # places each bar centred on the provided bin edge, so the bar covering
     # value v is centred on v (e.g. the bar for 0.0 is centred at 0.0, not at
-    # 0.0 + width/2).
+    # 0.0 + width/2). Bounded features pass fixed edges spanning the whole
+    # 0..1 range (with one extra bin width past 1.0, so the trailing bar that
+    # represents values in [0.975, 1.0] is centred exactly on 1.0) and the
+    # bars line up on the 0.0, 0.025, ..., 1.0 grid; unbounded features fall
+    # back to the observed data range.
     nbins = 40
-    if hi > lo:
-        bin_edges = np.linspace(lo, hi, nbins + 1)
+    if bins is None:
+        if hi > lo:
+            bin_edges = np.linspace(lo, hi, nbins + 1)
+        else:
+            bin_edges = np.linspace(lo - 0.5, lo + 0.5, nbins + 1)
     else:
-        bin_edges = np.linspace(lo - 0.5, lo + 0.5, nbins + 1)
+        bin_edges = bins
 
     if color_of is None:
         color_of = lambda v: _goodness(v, lo, hi, good_direction)
@@ -429,28 +462,31 @@ def plot_dataset_overview(accepted, rejected, selected, output_dir):
             combined = combined[~np.isnan(combined)]
             if combined.size:
                 lo, hi = float(combined.min()), float(combined.max())
-                goodness = np.array([_goodness(v, lo, hi, 1) for v in combined])
-                gmin, gmax = float(goodness.min()), float(goodness.max())
             else:
-                lo, hi, gmin, gmax = 0.0, 1.0, 0.0, 1.0
+                lo, hi = 0.0, 1.0
             bounded = attr in BOUNDED_FEATURES
-            if not (gmax > gmin):
-                rel_norm = Normalize(gmin - 0.5, gmin + 0.5)
+
+            # relative colourbar scale: the data min is rounded down and the
+            # max up to the second decimal place, and the ticks (at most 3
+            # decimal places) label that clean range in reported units.
+            rel_lo, rel_hi = _round_range(lo, hi)
+            if rel_hi <= rel_lo:
+                rel_norm = Normalize(rel_lo - 0.5, rel_lo + 0.5)
                 rel_ticks = None
             else:
-                rel_norm = Normalize(gmin, gmax)
-                # colourbar ticks show the *reported* values behind the
-                # goodness scale in full notation, so the relative plot reads
-                # in the feature's real (already inverted) units.
-                mid = (gmin + gmax) / 2.0
+                rel_norm = Normalize(0.0, 1.0)
                 rel_ticks = [
-                    (gmin, _format_tick(_raw_at_goodness(gmin, lo, hi, gmin, gmax, 1))),
-                    (mid, _format_tick(_raw_at_goodness(mid, lo, hi, gmin, gmax, 1))),
-                    (gmax, _format_tick(_raw_at_goodness(gmax, lo, hi, gmin, gmax, 1))),
+                    (0.0, _format_relative_tick(rel_lo)),
+                    (0.5, _format_relative_tick(0.5 * (rel_lo + rel_hi))),
+                    (1.0, _format_relative_tick(rel_hi)),
                 ]
 
-            title = f"{label} — {'pre-filter raw stat' if group == 'raw' else 'quality score'}"
-
+            title = (f"{label} (statistical pre-filter)" if group == "raw"
+                     else f"{label} Score")
+            # fixed 0..1 grid for bounded features: 41 bins of width 0.025,
+            # with one extra bin width past 1.0 so the final bar is centred on
+            # 1.0 (align='left' centres bars on the leading edge of each bin)
+            overview_bins = np.linspace(0.0, 1.0 + 0.025, 42) if bounded else None
             # fixed variant: only meaningful for [0, 1]-bounded features.
             # Unbounded counting stats (laplacian, tenengrad, boundary-blur
             # variance) have no fixed 0..1 scale and get the relative plot only.
@@ -461,7 +497,8 @@ def plot_dataset_overview(accepted, rejected, selected, output_dir):
                                  attr, label, good_direction,
                                  WARM_COLD_CMAP, Normalize(0.0, 1.0), GOOD_FIXED_LABEL,
                                  color_of=fixed_color_of,
-                                 value_of=lambda v: _report_value(attr, v))
+                                 value_of=lambda v: _report_value(attr, v),
+                                 bins=overview_bins)
                 fig.suptitle(title, fontsize=12)
                 fig.tight_layout(rect=(0, 0, 1, 0.95))
                 fixed_path = out_dir / f"{prefix}{attr}_fixed.png"
@@ -475,9 +512,10 @@ def plot_dataset_overview(accepted, rejected, selected, output_dir):
             _plot_metric_row(ax_hist, ax_scatter, accepted, rejected, selected,
                              attr, label, good_direction,
                              REL_CMAP, rel_norm, GOOD_RELATIVE_LABEL,
-                             color_of=lambda v: _goodness(v, lo, hi, 1),
+                             color_of=lambda v: _goodness(v, rel_lo, rel_hi, 1),
                              colorbar_ticks=rel_ticks,
-                             value_of=lambda v: _report_value(attr, v))
+                             value_of=lambda v: _report_value(attr, v),
+                             bins=overview_bins)
             fig.suptitle(title, fontsize=12)
             fig.tight_layout(rect=(0, 0, 1, 0.95))
             rel_path = out_dir / f"{prefix}{attr}_relative.png"
@@ -591,22 +629,19 @@ def _prob_sample_low_quality(pool, feature_attr, good_direction, k, rng=None):
     return [scored[i] for i in idx]
 
 
-def _save_example_row(examples, n_per_feature, attr, title, out_path, reported_of=None):
+def _save_example_row(examples, n_per_feature, attr, title, out_path,
+                      status_line, rel_range, reported_of=None):
     """Render one row of example thumbnails to ``out_path``.
 
-    Each thumbnail gets the feature overlay, a coolwarm frame whose colour
-    tracks reported goodness (warm = good, cold = bad) and a label with the
-    frame id, reported value and rejection reason (accepted frames show
-    "accepted"). Empty slots become placeholder tiles.
+    Each thumbnail gets the feature overlay, a frame whose border colour is
+    the *viridis* colour of the relative score (goodness over the min/max of
+    all samples, exactly like the ``data_set_overview`` relative plots), and a
+    two-line label: ``<status>`` on top, ``#<id> | QS: <reported value>``
+    below. Empty slots become placeholder tiles.
     """
     if reported_of is None:
         reported_of = lambda v: _report_value(attr, v)
     n_avail = len(examples)
-    if n_avail:
-        vals = np.array([reported_of(v) for _, v in examples])
-        lo, hi = float(vals.min()), float(vals.max())
-    else:
-        lo, hi = 0.0, 1.0
 
     fig, axes = plt.subplots(1, n_per_feature, figsize=(3.4 * n_per_feature, 3.8))
     if not isinstance(axes, np.ndarray):
@@ -621,22 +656,26 @@ def _save_example_row(examples, n_per_feature, attr, title, out_path, reported_o
             continue
         obs, value = examples[col]
         overlay = _feature_overlay(obs, attr)
-        reason = obs.rejection_reason or "accepted"
+        reported = reported_of(value)
+        status = status_line(obs, reported)
         if overlay is None:
             ax.imshow(np.full((64, 64, 3), 210, dtype=np.uint8))
-            ax.set_title(f"#{obs.id}\n{reason}", fontsize=8)
+            ax.set_title(f"{status}\n#{obs.id}", fontsize=8)
             continue
         ax.imshow(overlay)
 
-        # frame border color tracks goodness: warm = good, cold = bad
-        reported = reported_of(value)
-        frac = _goodness(reported, lo, hi, 1)
-        color = WARM_COLD_CMAP(frac)
+        # border colour = viridis relative score over the min/max of all
+        # samples, matching the data_set_overview relative colourbar
+        if rel_range is not None:
+            lo, hi = rel_range
+            color = REL_CMAP(_goodness(reported, lo, hi, 1))
+        else:
+            color = REL_CMAP(0.5)
         ax.add_patch(Rectangle(
             (0, 0), 1, 1, transform=ax.transAxes,
             fill=False, edgecolor=color, linewidth=4,
         ))
-        ax.set_title(f"#{obs.id} {_format_tick(reported)}\n{reason}", fontsize=8)
+        ax.set_title(f"{status}\n#{obs.id} | QS: {_format_tick(reported)}", fontsize=8)
 
     fig.suptitle(title, fontsize=12)
     fig.tight_layout(rect=(0, 0, 1, 0.92))
@@ -645,6 +684,16 @@ def _save_example_row(examples, n_per_feature, attr, title, out_path, reported_o
     fig.savefig(out_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
     print(f"  Saved {out_path}")
+
+
+def _feature_rel_range(accepted, rejected, attr):
+    """(lo, hi) of the reported values over all samples, or None when empty."""
+    vals = list(_feature_values(accepted, attr)) + list(_feature_values(rejected, attr))
+    vals = np.array([_report_value(attr, v) for v in vals])
+    vals = vals[~np.isnan(vals)]
+    if vals.size:
+        return float(vals.min()), float(vals.max())
+    return None
 
 
 def plot_bad_examples(accepted, rejected, selected, output_dir, n_per_feature=BAD_EXAMPLES_PER_FEATURE):
@@ -663,6 +712,9 @@ def plot_bad_examples(accepted, rejected, selected, output_dir, n_per_feature=BA
     ``bad_examples/selection_stage/`` — quality scores:
       ``lower_<attr>_quality.png`` lowest-quality accepted frames per quality
                                    score, probability-sampled.
+
+    Every thumbnail border is coloured with the viridis relative score (same
+    min/max-of-all-samples scale as the ``data_set_overview`` relative plots).
     """
     output_dir = Path(output_dir)
     rng = np.random.default_rng(0)
@@ -673,6 +725,7 @@ def plot_bad_examples(accepted, rejected, selected, output_dir, n_per_feature=BA
     sel_dir.mkdir(parents=True, exist_ok=True)
 
     for attr, label, good_direction in RAW_FEATURES:
+        rel_range = _feature_rel_range(accepted, rejected, attr)
         reasons = _FEATURE_REASONS.get(attr, ())
         reason_pool = [o for o in rejected if o.rejection_reason in reasons] if reasons else []
         if reason_pool:
@@ -680,8 +733,10 @@ def plot_bad_examples(accepted, rejected, selected, output_dir, n_per_feature=BA
             if examples:
                 _save_example_row(
                     examples, n_per_feature, attr,
-                    f"Filtered-out examples: {label} — pre-filter raw stat",
+                    f"Filtered-out examples: {label}",
                     pre_dir / f"{attr}_filtered.png",
+                    status_line=lambda o, r: f"rejected - {o.rejection_reason or 'rejected'}",
+                    rel_range=rel_range,
                 )
         else:
             examples = _prob_sample_low_quality(
@@ -689,16 +744,21 @@ def plot_bad_examples(accepted, rejected, selected, output_dir, n_per_feature=BA
             if examples:
                 _save_example_row(
                     examples, n_per_feature, attr,
-                    f"Lowest-quality accepted frames: {label} — pre-filter raw stat",
+                    f"Lowest-quality accepted frames: {label}",
                     pre_dir / f"lower_{attr}_quality.png",
+                    status_line=lambda o, r, lbl=label: f"accepted - {lbl}",
+                    rel_range=rel_range,
                 )
 
     for attr, label, good_direction in QUALITY_FEATURES:
+        rel_range = _feature_rel_range(accepted, rejected, attr)
         examples = _prob_sample_low_quality(
             accepted, attr, good_direction, n_per_feature, rng=rng)
         if examples:
             _save_example_row(
                 examples, n_per_feature, attr,
-                f"Lowest-quality accepted frames: {label} — quality score",
+                f"Lowest-quality accepted frames: {label}",
                 sel_dir / f"lower_{attr}_quality.png",
+                status_line=lambda o, r: "accepted but not selected",
+                rel_range=rel_range,
             )
