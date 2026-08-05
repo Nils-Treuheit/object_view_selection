@@ -5,18 +5,15 @@ Ported from nit_view_selection/select_best_views.py (plot_dataset_overview /
 plot_bad_examples) and extended to cover every feature (all pre-filter raw
 stats plus all quality component scores), not just the Vincent soft filters.
 
-Output layout (inside the pre-filter plots dir):
-  data_set_overview/
-    raw_filter_<feature>_fixed.png       # goodness on a fixed coolwarm 0..1 scale (bounded features only)
-    raw_filter_<feature>_relative.png    # goodness on a data-relative viridis scale
+Output layout (raw stats in the pre-filter plots dir, quality scores in the
+selection plots dir):
+  <pre-filter>/data_set_overview/
+    <feature>_filter_fixed.png       # goodness on a fixed coolwarm 0..1 scale (bounded features only)
+    <feature>_filter_relative.png    # goodness on a data-relative viridis scale
+  <selection>/data_set_overview/
     quality_score_<feature>_fixed.png
     quality_score_<feature>_relative.png
-  bad_examples/
-    pre-filter_stage/
-      <feature>_filtered.png         # up to 5 frames actually rejected for that feature's reason
-      lower_<feature>_quality.png    # prob-sampled lowest-quality accepted frames (reason never fired)
-    selection_stage/
-      lower_<feature>_quality.png    # prob-sampled lowest-quality accepted frames per quality score
+  bad_examples/                      # sibling of plots/, split by pipeline stage
 
 Each data_set_overview image has a distribution histogram on the left (x-axis
 fixed to [-0.05, 1.05] when the feature is bounded to [0, 1]) and the feature
@@ -443,14 +440,21 @@ def _plot_metric_row(ax_hist, ax_scatter, accepted, rejected, selected,
     ax_scatter.tick_params(labelsize=6)
 
 
-def plot_dataset_overview(accepted, rejected, selected, output_dir):
-    """Two data_set_overview images per feature (fixed + relative goodness)."""
-    output_dir = Path(output_dir)
-    for group, features, prefix in [
-        ("raw", RAW_FEATURES, "raw_filter_"),
-        ("quality", QUALITY_FEATURES, "quality_score_"),
+def plot_dataset_overview(accepted, rejected, selected, dir_pre, dir_selection):
+    """Two data_set_overview images per feature (fixed + relative goodness).
+
+    Raw pre-filter stats land in ``dir_pre/data_set_overview`` under the
+    ``<feature>_filter_{fixed,relative}.png`` names; quality-score overviews
+    land in ``dir_selection/data_set_overview`` under
+    ``quality_score_<feature>_{fixed,relative}.png``.
+    """
+    dir_pre = Path(dir_pre)
+    dir_selection = Path(dir_selection)
+    for group, features in [
+        ("raw", RAW_FEATURES),
+        ("quality", QUALITY_FEATURES),
     ]:
-        out_dir = output_dir / "data_set_overview"
+        out_dir = (dir_selection if group == "quality" else dir_pre) / "data_set_overview"
         out_dir.mkdir(parents=True, exist_ok=True)
         for attr, label, good_direction in features:
             # reported values: lower-is-better features are inverted (1 - value)
@@ -483,6 +487,14 @@ def plot_dataset_overview(accepted, rejected, selected, output_dir):
 
             title = (f"{label} (statistical pre-filter)" if group == "raw"
                      else f"{label} Score")
+            # raw stats: <feature>_filter_{fixed,relative}.png
+            # quality scores: quality_score_<feature>_{fixed,relative}.png
+            if group == "raw":
+                fixed_stem = f"{attr}_filter_fixed"
+                rel_stem = f"{attr}_filter_relative"
+            else:
+                fixed_stem = f"quality_score_{attr}_fixed"
+                rel_stem = f"quality_score_{attr}_relative"
             # fixed 0..1 grid for bounded features: 41 bins of width 0.025,
             # with one extra bin width past 1.0 so the final bar is centred on
             # 1.0 (align='left' centres bars on the leading edge of each bin)
@@ -501,7 +513,7 @@ def plot_dataset_overview(accepted, rejected, selected, output_dir):
                                  bins=overview_bins)
                 fig.suptitle(title, fontsize=12)
                 fig.tight_layout(rect=(0, 0, 1, 0.95))
-                fixed_path = out_dir / f"{prefix}{attr}_fixed.png"
+                fixed_path = out_dir / f"{fixed_stem}.png"
                 fig.savefig(fixed_path, dpi=150)
                 plt.close(fig)
                 print(f"  Saved {fixed_path}")
@@ -518,7 +530,7 @@ def plot_dataset_overview(accepted, rejected, selected, output_dir):
                              bins=overview_bins)
             fig.suptitle(title, fontsize=12)
             fig.tight_layout(rect=(0, 0, 1, 0.95))
-            rel_path = out_dir / f"{prefix}{attr}_relative.png"
+            rel_path = out_dir / f"{rel_stem}.png"
             fig.savefig(rel_path, dpi=150)
             plt.close(fig)
             print(f"  Saved {rel_path}")

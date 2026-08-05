@@ -3,6 +3,7 @@ import shutil
 import tempfile
 from pathlib import Path
 
+import cv2
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
@@ -229,7 +230,7 @@ def test_standalone_loader_valid_input():
                         "hand_overlap": 0.5, "completeness": 0.6}]
                      ).to_csv(out / "rejected_metrics.csv", index=False)
 
-        accepted, rejected, selected, emb2, sidx, qs2 = _load_from_disk(out)
+        accepted, rejected, selected, emb2, sidx, qs2, pool_obs = _load_from_disk(out)
 
         check(len(accepted) == n, f"loaded {len(accepted)} accepted")
         check(len(rejected) == 1, f"loaded {len(rejected)} rejected")
@@ -237,6 +238,8 @@ def test_standalone_loader_valid_input():
         check(emb2.shape == (n, dim), f"embeddings shape {emb2.shape}")
         check(len(sidx) == 4, f"selected_idx length {len(sidx)}")
         check(len(qs2) == n, f"quality_scores length {len(qs2)}")
+        check(len(pool_obs) == n, f"pool_obs aligned with embeddings ({len(pool_obs)})")
+        check([o.id for o in pool_obs] == ids, "pool_obs in selection-pool order")
 
 
 def test_standalone_loader_missing_file():
@@ -373,27 +376,39 @@ def test_feature_overview_plots_saved():
         )
 
         pre = out / "plots" / "pre-filter"
-        overview = pre / "data_set_overview"
-        bad = pre / "bad_examples"
+        sel = out / "plots" / "selection"
+        raw_overview = pre / "data_set_overview"
+        qual_overview = sel / "data_set_overview"
+        bad = out / "bad_examples"
         pre_stage = bad / "pre-filter_stage"
         sel_stage = bad / "selection_stage"
-        check(overview.is_dir(), "data_set_overview/ exists")
+        check(raw_overview.is_dir(), "pre-filter/data_set_overview/ exists")
+        check(qual_overview.is_dir(), "selection/data_set_overview/ exists")
         check(pre_stage.is_dir(), "bad_examples/pre-filter_stage/ exists")
         check(sel_stage.is_dir(), "bad_examples/selection_stage/ exists")
 
+        # raw stats -> pre-filter/data_set_overview/<feature>_filter_*.png;
         # bounded features get both variants (fixed + relative); unbounded
         # counting stats (laplacian, tenengrad, boundary-blur variance) get
-        # the relative plot only. Bad-example images land in the stage folders.
-        for name in ["raw_filter_laplacian", "raw_filter_tenengrad",
-                     "raw_filter_vincent_boundary_blur_variance"]:
-            check(not (overview / f"{name}_fixed.png").exists(),
+        # the relative plot only.
+        for name in ["laplacian_filter", "tenengrad_filter",
+                     "vincent_boundary_blur_variance_filter"]:
+            check(not (raw_overview / f"{name}_fixed.png").exists(),
                   f"no fixed variant for unbounded {name}")
-            check((overview / f"{name}_relative.png").exists(),
-                  f"data_set_overview/{name}_relative.png saved")
-        for name in ["raw_filter_area_ratio",
-                     "quality_score_blur", "quality_score_occlusion", "quality_score_score"]:
-            check((overview / f"{name}_fixed.png").exists(), f"data_set_overview/{name}_fixed.png saved")
-            check((overview / f"{name}_relative.png").exists(), f"data_set_overview/{name}_relative.png saved")
+            check((raw_overview / f"{name}_relative.png").exists(),
+                  f"pre-filter/data_set_overview/{name}_relative.png saved")
+        for name in ["area_ratio_filter"]:
+            check((raw_overview / f"{name}_fixed.png").exists(),
+                  f"pre-filter/data_set_overview/{name}_fixed.png saved")
+            check((raw_overview / f"{name}_relative.png").exists(),
+                  f"pre-filter/data_set_overview/{name}_relative.png saved")
+
+        # quality scores -> selection/data_set_overview/quality_score_*.png
+        for name in ["quality_score_blur", "quality_score_occlusion", "quality_score_score"]:
+            check((qual_overview / f"{name}_fixed.png").exists(),
+                  f"selection/data_set_overview/{name}_fixed.png saved")
+            check((qual_overview / f"{name}_relative.png").exists(),
+                  f"selection/data_set_overview/{name}_relative.png saved")
 
         # mock rejected frames all carry reason "blur" -> laplacian/tenengrad
         # get *_filtered.png; every other stat falls back to lower_*_quality.png
@@ -408,15 +423,20 @@ def test_feature_overview_plots_saved():
         check((sel_stage / "lower_score_quality.png").exists(),
               "selection_stage/lower_score_quality.png saved")
 
-        # no legacy combined images / no non-suffixed overview images / no
-        # flat bad_examples images
+        # no legacy combined images / no old raw_filter_* names / no flat
+        # bad_examples images / bad_examples not inside plots/pre-filter
         check(not (pre / "dataset_overview_raw.png").exists(), "no legacy dataset_overview_raw.png")
         check(not (pre / "bad_examples_raw.png").exists(), "no legacy bad_examples_raw.png")
-        check(not (overview / "raw_filter_laplacian.png").exists(), "no non-suffixed overview image")
+        check(not (raw_overview / "raw_filter_laplacian.png").exists(), "no non-suffixed overview image")
+        check(not (raw_overview / "raw_filter_laplacian_relative.png").exists(),
+              "no old raw_filter_* names")
+        check(not (pre / "bad_examples").exists(), "bad_examples is not inside plots/pre-filter")
         check(not (bad / "raw_filter_laplacian.png").exists(), "no flat bad_examples image")
         check(not (bad / "quality_score_score.png").exists(), "no flat quality bad_examples image")
 
-        for f in list(overview.glob("*.png")) + list(pre_stage.glob("*.png")) + list(sel_stage.glob("*.png")):
+        files = (list(raw_overview.glob("*.png")) + list(qual_overview.glob("*.png"))
+                 + list(pre_stage.glob("*.png")) + list(sel_stage.glob("*.png")))
+        for f in files:
             check(f.stat().st_size > 1024, f"{f.name} has content")
 
 
@@ -807,7 +827,8 @@ def test_relative_colorbar_range_rounded_and_ticks():
     with mock.patch.object(feature_plots, "_plot_metric_row") as mr:
         with tempfile.TemporaryDirectory() as tmp:
             feature_plots.plot_dataset_overview(accepted, rejected, selected,
-                                                Path(tmp) / "plots")
+                                                Path(tmp) / "plots" / "pre-filter",
+                                                Path(tmp) / "plots" / "selection")
         rel_calls = [c for c in mr.call_args_list
                      if c.kwargs.get("colorbar_ticks") is not None]
         check(len(rel_calls) > 0, "relative variants produced with ticks")
@@ -851,6 +872,122 @@ def test_3d_html_has_content():
         content = path.read_text(encoding="utf-8")
         check(len(content) > 5000, f"3D HTML content length {len(content)} > 5000")
         check("Plotly" in content, "HTML contains Plotly JS")
+
+
+def test_neighbor_plots_debug_gated():
+    """selected_neighbors_* and selected_clusters_pca appear only with debug."""
+    from plotting_process.wrapper import plot_all
+
+    for debug in (False, True):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            embeddings, qs, sel_idx = _make_synthetic_data(30, 64, 4)
+            accepted, rejected, selected = _make_mock_observations(embeddings, qs, sel_idx)
+
+            plot_all(
+                accepted=accepted, rejected=rejected, selected=selected,
+                embeddings=embeddings, selected_idx=sel_idx, quality_scores=qs,
+                output_dir=out, debug=debug, single_set_plots=False,
+            )
+
+            sel_dir = out / "plots" / "selection"
+            for name in ["selected_neighbors_knn.png",
+                         "selected_neighbors_kmeans.png",
+                         "selected_clusters_pca.png"]:
+                f = sel_dir / name
+                if debug:
+                    check(f.exists(), f"{name} present with debug=True")
+                    check(f.stat().st_size > 1024, f"{name} has content")
+                else:
+                    check(not f.exists(), f"{name} absent without debug")
+
+
+def test_selected_samples_export():
+    """save_selected_samples copies the selected tuples into selected_samples/<obj_id>/."""
+    from data_io.observation import Observation
+    from run import save_selected_samples
+
+    img = np.full((32, 32, 3), 120, dtype=np.uint8)
+    msk = np.full((32, 32), 255, dtype=np.uint8)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp) / "bottle_obj"
+        (root / "images").mkdir(parents=True)
+        (root / "masks").mkdir(parents=True)
+        (root / "object_hands").mkdir(parents=True)
+        (root / "depth").mkdir(parents=True)
+        for i in range(3):
+            cv2.imwrite(str(root / "images" / f"{i:05d}.png"), img)
+            cv2.imwrite(str(root / "masks" / f"{i:05d}.png"), msk)
+            cv2.imwrite(str(root / "object_hands" / f"{i:05d}.png"), msk)
+            np.save(root / "depth" / f"{i:05d}.npy", img.astype(np.float32))
+
+        out = Path(tmp) / "results"
+        selected = [
+            Observation(
+                id=i,
+                image_path=root / "images" / f"{i:05d}.png",
+                mask_path=root / "masks" / f"{i:05d}.png",
+                object_hand_path=root / "object_hands" / f"{i:05d}.png",
+                image=cv2.cvtColor(cv2.imread(str(root / "images" / f"{i:05d}.png")),
+                                   cv2.COLOR_BGR2RGB),
+                mask=msk,
+                object_hand=msk,
+            )
+            for i in range(3)
+        ]
+
+        base = save_selected_samples(selected, str(root), out)
+        check(base.name == "bottle_obj", f"obj_id folder named after data_root (got {base.name})")
+        for i in range(3):
+            check((base / "rgb" / f"{i:05d}.png").exists(), f"rgb/{i:05d}.png saved")
+            check((base / "mask" / f"{i:05d}.png").exists(), f"mask/{i:05d}.png saved")
+            check((base / "depth" / f"{i:05d}.npy").exists(), f"depth/{i:05d}.npy saved")
+            check((base / "hand_mask" / f"{i:05d}.png").exists(), f"hand_mask/{i:05d}.png saved")
+
+    # dataset without depth / hand data: those subfolders are skipped
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp) / "nodepth"
+        (root / "images").mkdir(parents=True)
+        (root / "masks").mkdir(parents=True)
+        cv2.imwrite(str(root / "images" / "00000.png"), img)
+        cv2.imwrite(str(root / "masks" / "00000.png"), msk)
+
+        out = Path(tmp) / "out2"
+        selected = [Observation(
+            id=0,
+            image_path=root / "images" / "00000.png",
+            mask_path=root / "masks" / "00000.png",
+            object_hand_path=None,
+        )]
+        base = save_selected_samples(selected, str(root), out)
+        check((base / "rgb" / "00000.png").exists(), "rgb saved without depth data")
+        check(not (base / "depth").exists(), "no depth folder without depth data")
+        check(not (base / "hand_mask").exists(), "no hand_mask folder without hand data")
+
+
+def test_filter_order_cli_override():
+    """--filter_order reorders the pre-filter pipeline; default is the config order."""
+    import run
+    from config import PipelineConfig
+
+    cfg = PipelineConfig()
+    check(cfg.filters.filter_order == [
+        "vincent_empty_mask", "vincent_border_pixel",
+        "border", "area", "confidence", "blur", "occlusion", "completeness",
+    ], "default filter order is the current setup")
+
+    built = run.build_filters(cfg)
+    names = [type(f).__name__ for f in built.filters]
+    check(names == ["VincentEmptyMaskFilter", "VincentBorderPixelFilter",
+                    "BorderFilter", "AreaFilter", "ConfidenceFilter",
+                    "BlurFilter", "OcclusionFilter", "CompletenessFilter"],
+          f"default pipeline built in order (got {names})")
+
+    cfg.filters.filter_order = ["blur", "area"]
+    built = run.build_filters(cfg)
+    check([type(f).__name__ for f in built.filters] == ["BlurFilter", "AreaFilter"],
+          "overridden order respected")
 
 
 if __name__ == "__main__":

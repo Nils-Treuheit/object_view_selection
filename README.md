@@ -56,9 +56,6 @@ bottle/
 # Run the full pipeline (auto-tuning enabled by default)
 python run.py --data_root /path/to/bottle --num_views 10 --output_dir ./outputs
 
-# Disable auto-threshold tuning (use static config values instead)
-python run.py --data_root /path/to/bottle --num_views 10 --no-auto-thresholds
-
 # DINOv3 embeddings (default model: dinov3-vitb16)
 python run.py --data_root /path/to/bottle --num_views 10
 
@@ -87,6 +84,13 @@ python run.py --data_root /path/to/bottle --selector fps --num_views 10
 python run.py --data_root /path/to/bottle --selector dpp --num_views 10
 python run.py --data_root /path/to/bottle \
   --selector quality_diversity --selector_alpha 0.3 --selector_beta 0.7
+
+# Custom pre-filter order (comma-separated, defaults to the config order)
+python run.py --data_root /path/to/bottle \
+  --filter_order "blur,area,border,occlusion,confidence,completeness"
+
+# Disable auto-threshold tuning (use static config values instead)
+python run.py --data_root /path/to/bottle --no-auto-thresholds
 ```
 
 ### Generating Plots
@@ -100,7 +104,7 @@ python run.py --data_root /path/to/bottle --num_views 10 --output_dir ./outputs 
 python run.py --data_root /path/to/bottle --num_views 10 --output_dir ./outputs --plot --debug
 ```
 
-Plots are saved under `outputs/plots/`. See [`docs/plotting.md`](docs/plotting.md) for a complete reference.
+Plots are saved under `outputs/plots/` and example frames under `outputs/bad_examples/`. `--debug` additionally enables single-set violins, all dimensionality-reduction methods, and the embedding-neighbour diagnostics (`plots/selection/selected_neighbors_*.png`, `plots/selection/selected_clusters_pca.png`). See [`docs/plotting.md`](docs/plotting.md) for a complete reference.
 
 ### Standalone Plotting
 
@@ -110,7 +114,7 @@ Re-generate plots from a previous pipeline run without re-running the pipeline:
 python -m plotting_process.wrapper --input_dir ./outputs [--output_dir ./plots] [--debug]
 ```
 
-If `--output_dir` is omitted, the `plots/` folder is created inside `--input_dir`.
+If `--output_dir` is omitted, the `plots/` folder is created inside `--input_dir`. The selected-sample folders are produced by the pipeline itself (`run.py`), not by the standalone plotter.
 
 ### Arguments
 
@@ -122,8 +126,9 @@ If `--output_dir` is omitted, the `plots/` folder is created inside `--input_dir
 | `--embedding` | `auto` | `auto`, `dinov3`, `dinov2`, `siglip2`, `siglip`, `moonvit`, `clip`, `eva_clip` |
 | `--embedding_model` | `facebook/dinov3-vitb16-pretrain-lvd1689m` | Model name or path; type inferred automatically when `--embedding=auto` |
 | `--selector` | `quality_diversity` | `fps`, `quality_diversity`, `facility_location`, `dpp`, `next_best_view` |
-| `--selector_alpha` | `0.4` | Quality weight for GQD selector |
-| `--selector_beta` | `0.6` | Diversity weight for GQD selector |
+| `--selector_alpha` | `0.60` | Quality weight for GQD selector |
+| `--selector_beta` | `0.40` | Diversity weight for GQD selector |
+| `--filter_order` | config default | Comma-separated pre-filter order, e.g. `vincent_empty_mask,vincent_border_pixel,border,area,confidence,blur,occlusion,completeness` |
 | `--use_shape_descriptors` | `False` | Use classical shape descriptors (CPU) |
 | `--shape_descriptor` | `hu` | `hu`, `zernike`, `fourier`, `shape_context` |
 | `--no-auto-thresholds` | `False` | Disable data-driven threshold tuning |
@@ -145,6 +150,19 @@ outputs/
 ├── rejected_metrics.csv   # Pre-filter raw metrics for rejected obs.
 ├── visualization.png      # Overview grid of selected views
 │
+├── selected_samples/      # Final selected tuples, re-organized by data type:
+│   └── <obj_id>/          #   named exactly like the last component of data_root
+│       ├── rgb/           #   selected object images
+│       ├── mask/          #   selected object masks
+│       ├── depth/         #   frame-wise depth (only when <data_root>/depth exists)
+│       └── hand_mask/     #   hand masks (only when a hand mask is available)
+│
+├── bad_examples/          # Per-stage example frames (if --plot)
+│   ├── pre-filter_stage/  # <feature>_filtered.png (reason-matched) or
+│   │   └── {<feature>_filtered,lower_<feature>_quality}.png
+│   └── selection_stage/   # lower_<feature>_quality.png (prob-sampled)
+│       └── lower_<feature>_quality.png
+│
 └── plots/                 # Diagnostic plots (if --plot)
     ├── pre-filter/
     │   ├── violin_rejected_vs_accepted.png
@@ -152,16 +170,13 @@ outputs/
     │   ├── pre_filter_raw_stats.png       # All pre-filter elements (accepted vs rejected)
     │   ├── pre_filter_soft_weights.png    # Vincent soft-filter population weights
     │   ├── rejection_reasons.png          # Occlusion and truncation kept as separate bars
-    │   ├── data_set_overview/             # Per-feature overview, two variants each:
-    │   │   └── {raw_filter_,quality_score_}<feature>_{fixed,relative}.png
-    │   └── bad_examples/                  # Per-stage example frames
-    │       ├── pre-filter_stage/          # <feature>_filtered.png (reason-matched) or
-    │       │   └── {<feature>_filtered,lower_<feature>_quality}.png
-    │       └── selection_stage/           # lower_<feature>_quality.png (prob-sampled)
-    │           └── lower_<feature>_quality.png
+    │   └── data_set_overview/             # Raw pre-filter stats, two variants each:
+    │       └── <feature>_filter_{fixed,relative}.png
     │
     └── selection/
         ├── violin_*.png                   # Quality-score violins
+        ├── data_set_overview/             # Quality scores, two variants each:
+        │   └── quality_score_<feature>_{fixed,relative}.png
         │
         ├── 2D_DR_plots/
         │   ├── selection_embedding.png    # PCA (jet)
@@ -169,10 +184,15 @@ outputs/
         │   ├── embedding_mds.png
         │   └── embedding_{tsne,umap,...}.png   # (debug only)
         │
-        └── 3D_DR_plots/
-            ├── selection_embedding_3d.html     # PCA (plotly)
-            ├── embedding_mds_3d.html
-            └── embedding_{tsne,umap,...}_3d.html  # (debug only)
+        ├── 3D_DR_plots/
+        │   ├── selection_embedding_3d.html     # PCA (plotly)
+        │   ├── embedding_mds_3d.html
+        │   └── embedding_{tsne,umap,...}_3d.html  # (debug only)
+        │
+        └── debug (--debug only):
+            ├── selected_neighbors_knn.png      # 5-NN of each selected view (embedding)
+            ├── selected_neighbors_kmeans.png   # 5 neighbours from the selected view's k-means cluster
+            └── selected_clusters_pca.png       # PCA scatter coloured by k-means cluster
 ```
 
 ## Configuration
@@ -193,7 +213,7 @@ Their raw stats and weights are exported to `quality.csv` (`vincent_*` / `vincen
 
 ## Testing
 
-The project has **273 correctness tests** and **51 smoke tests** (including the Vincent hard/soft pre-filters, robust population scoring, and run.py wiring).
+The project has **190 correctness test functions** (609 check assertions) and **51 smoke test checks** (including the Vincent hard/soft pre-filters, robust population scoring, and run.py wiring).
 
 ### Correctness Tests
 
@@ -206,7 +226,7 @@ python test_correctness.py
 # or
 python tests/run_correctness.py
 
-# Expected output: Results: 273 passed, 0 failed out of 273
+# Expected output: Results: 190 passed, 0 failed out of 190
 ```
 
 ### Smoke Tests
@@ -296,6 +316,8 @@ object_view_selection/
 │   ├── wrapper.py                 # plot_all() + standalone CLI
 │   ├── misc_plot.py               # Rejection-reasons bar chart
 │   ├── pre_filter_plots.py        # Per-element pre-filter histograms
+│   ├── feature_plots.py           # Per-feature overview + bad-example plots
+│   ├── neighbor_plots.py          # Debug k-means / k-NN neighbour diagnostics
 │   ├── embedding_plots/           # 2D/3D DR scatter plots
 │   │   ├── base.py                # Shared scatter-drawing helpers
 │   │   └── {pca,mds,tsne,...}.py  # One file per DR method

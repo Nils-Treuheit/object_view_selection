@@ -57,7 +57,6 @@ def _load_from_disk(input_dir):
     # (accepted observations above the quality floor), not to all accepted.
     pool_ids = report.get("selection_pool_ids", report["accepted_ids"])
     quality_scores = np.array([id_to_quality[oid] for oid in pool_ids])
-
     data_root = Path(report.get("data_root", ""))
     img_map = _indexed_files(data_root / "images")
     msk_map = _indexed_files(data_root / "masks")
@@ -84,6 +83,10 @@ def _load_from_disk(input_dir):
     selected_ids_set = set(report["selected_ids"])
     selected = [o for o in accepted if o.id in selected_ids_set]
 
+    # pool observations aligned row-for-row with embeddings.npy
+    accepted_by_id = {o.id: o for o in accepted}
+    pool_obs = [accepted_by_id[oid] for oid in pool_ids if oid in accepted_by_id]
+
     rejected = []
     rej_path = input_dir / "rejected.json"
     if rej_path.exists():
@@ -103,7 +106,7 @@ def _load_from_disk(input_dir):
                 rejection_reason=r.get("reason"),
             ))
 
-    return accepted, rejected, selected, embeddings, selected_idx, quality_scores
+    return accepted, rejected, selected, embeddings, selected_idx, quality_scores, pool_obs
 
 
 def _ensure_dirs(base):
@@ -121,6 +124,7 @@ def plot_all(
     embeddings=None, selected_idx=None, quality_scores=None,
     output_dir=None, input_dir=None,
     debug=False, single_set_plots=False,
+    pool_obs=None,
 ):
     """
     Main plotting entry point.
@@ -132,12 +136,18 @@ def plot_all(
     input_dir (or current directory as last resort).
     """
     if input_dir is not None:
-        accepted, rejected, selected, embeddings, selected_idx, quality_scores = \
+        accepted, rejected, selected, embeddings, selected_idx, quality_scores, pool_obs = \
             _load_from_disk(input_dir)
 
     if output_dir is None:
         output_dir = Path(input_dir) if input_dir else Path.cwd()
     output_dir = Path(output_dir)
+    # the pipeline-results dir (report.json, rejected.json, ...) is the
+    # input_dir when running standalone, otherwise the output_dir itself
+    results_dir = Path(input_dir) if input_dir else output_dir
+
+    if pool_obs is None:
+        pool_obs = accepted
 
     plots_root = output_dir / "plots"
     dir_pre, dir_sel_2d, dir_sel_3d = _ensure_dirs(plots_root)
@@ -152,8 +162,8 @@ def plot_all(
 
     plot_pre_filter_distributions(accepted, rejected, dir_pre)
 
-    plot_dataset_overview(accepted, rejected, selected, dir_pre)
-    plot_bad_examples(accepted, rejected, selected, dir_pre)
+    plot_dataset_overview(accepted, rejected, selected, dir_pre, plots_root / "selection")
+    plot_bad_examples(accepted, rejected, selected, output_dir)
 
     if embeddings is not None and len(embeddings) >= 2:
         run_embedding_plots(
@@ -162,7 +172,14 @@ def plot_all(
             debug=debug,
         )
 
-    plot_rejection_reasons(output_dir, dir_pre)
+    if debug and embeddings is not None and len(embeddings) >= 2 and len(selected_idx) > 0:
+        from .neighbor_plots import plot_neighbor_analysis
+        plot_neighbor_analysis(
+            embeddings, selected_idx, pool_obs, quality_scores,
+            plots_root / "selection",
+        )
+
+    plot_rejection_reasons(results_dir, dir_pre)
 
     print("Done.")
 

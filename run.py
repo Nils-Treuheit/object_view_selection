@@ -1,4 +1,5 @@
 import json
+import shutil
 from pathlib import Path
 
 import cv2
@@ -286,6 +287,72 @@ def compute_quality_floor(quality_scores, num_views: int, cfg) -> float:
     return float(floor)
 
 
+def save_selected_samples(selected, data_root, output_dir):
+    """Copy the final selected tuples into ``selected_samples/<obj_id>/``.
+
+    The ``<obj_id>`` folder is named exactly like the last component of
+    ``data_root``. Under it the frames are re-organized into:
+
+      rgb/          selected object images
+      mask/         selected object masks
+      depth/        frame-wise depth information (only when a matching file
+                    exists in ``<data_root>/depth``)
+      hand_mask/    hand masks (only when a hand mask exists for the frame)
+    """
+    root = Path(data_root)
+    obj_id = root.name or "dataset"
+    base = Path(output_dir) / "selected_samples" / obj_id
+
+    rgb_dir = base / "rgb"
+    mask_dir = base / "mask"
+    rgb_dir.mkdir(parents=True, exist_ok=True)
+    mask_dir.mkdir(parents=True, exist_ok=True)
+
+    depth_src = root / "depth"
+    hand_src = root / "object_hands"
+
+    depth_map = {}
+    if depth_src.is_dir():
+        for p in depth_src.iterdir():
+            if p.suffix.lower() in (".png", ".npy", ".jpg", ".jpeg", ".tiff") and p.stem.isdigit():
+                depth_map[int(p.stem)] = p
+
+    hand_map = {}
+    if hand_src.is_dir():
+        for p in hand_src.glob("*.png"):
+            if p.stem.isdigit():
+                hand_map[int(p.stem)] = p
+
+    for obs in selected:
+        stem = f"{obs.id:05d}"
+        if obs.image is not None:
+            cv2.imwrite(str(rgb_dir / f"{stem}.png"),
+                        cv2.cvtColor(obs.image, cv2.COLOR_RGB2BGR))
+        elif obs.image_path is not None and Path(obs.image_path).exists():
+            shutil.copy(str(obs.image_path), str(rgb_dir / f"{stem}.png"))
+        if obs.mask is not None:
+            cv2.imwrite(str(mask_dir / f"{stem}.png"), obs.mask)
+        elif obs.mask_path is not None and Path(obs.mask_path).exists():
+            shutil.copy(str(obs.mask_path), str(mask_dir / f"{stem}.png"))
+
+        if depth_map:
+            depth_dir = base / "depth"
+            depth_dir.mkdir(parents=True, exist_ok=True)
+            dp = depth_map.get(obs.id)
+            if dp is not None:
+                shutil.copy(str(dp), str(depth_dir / dp.name))
+
+        if hand_map:
+            hand_mask_dir = base / "hand_mask"
+            hand_mask_dir.mkdir(parents=True, exist_ok=True)
+            hp = hand_map.get(obs.id)
+            if hp is not None:
+                shutil.copy(str(hp), str(hand_mask_dir / hp.name))
+
+    print(f"Selected samples saved to {base}")
+    return base
+
+
 def run_pipeline(cfg: PipelineConfig):
     output_dir = Path(cfg.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -469,6 +536,9 @@ def run_pipeline(cfg: PipelineConfig):
         if obs.object_hand is not None:
             cv2.imwrite(str(output_dir / "selected_object_hands" / f"{stem}.png"), obs.object_hand)
 
+    if selected:
+        save_selected_samples(selected, cfg.data_root, output_dir)
+
     if cfg.save_rejected:
         for obs in rejected:
             stem = f"{obs.id:05d}"
@@ -617,7 +687,7 @@ def run_pipeline(cfg: PipelineConfig):
     if cfg.save_plots:
         try:
             from utils.plotting import plot_all
-            plot_all(accepted, rejected, selected, embeddings, selected_idx, pool_quality, output_dir, single_set_plots=cfg.debug, debug=cfg.debug)
+            plot_all(accepted, rejected, selected, embeddings, selected_idx, pool_quality, output_dir, single_set_plots=cfg.debug, debug=cfg.debug, pool_obs=pool)
         except Exception as e:
             print(f"Plotting failed: {e}")
 
@@ -637,10 +707,23 @@ if __name__ == "__main__":
                         help="Model name or path; type inferred automatically when --embedding=auto")
     parser.add_argument("--selector", type=str, default="quality_diversity",
                         choices=["fps", "quality_diversity", "facility_location", "dpp", "next_best_view"])
+    parser.add_argument("--selector_alpha", type=float, default=None,
+                        help="Quality weight for the quality_diversity (GQD) selector "
+                             "(default: config value 0.60)")
+    parser.add_argument("--selector_beta", type=float, default=None,
+                        help="Diversity weight for the quality_diversity (GQD) selector "
+                             "(default: config value 0.40)")
+    parser.add_argument("--filter_order", type=str, default=None,
+                        help="Comma-separated pre-filter application order, e.g. "
+                             "'vincent_empty_mask,vincent_border_pixel,border,area,"
+                             "confidence,blur,occlusion,completeness'. "
+                             "Defaults to the config default (the current setup).")
     parser.add_argument("--use_shape_descriptors", action="store_true",
                         help="Use classical shape descriptors instead of learned embeddings")
     parser.add_argument("--shape_descriptor", type=str, default="hu",
                         choices=["hu", "zernike", "fourier", "shape_context"])
+    parser.add_argument("--no-auto-thresholds", action="store_true", dest="no_auto_thresholds",
+                        help="Disable data-driven threshold tuning (use static config values)")
     parser.add_argument("--plot", action="store_true", dest="save_plots",
                         help="Generate pipeline diagnostic plots")
     parser.add_argument("--debug", action="store_true",
@@ -656,7 +739,16 @@ if __name__ == "__main__":
         selector=args.selector,
         use_shape_descriptors=args.use_shape_descriptors,
         shape_descriptor=args.shape_descriptor,
+        auto_thresholds=not args.no_auto_thresholds,
         save_plots=args.save_plots,
         debug=args.debug,
     )
+    if args.selector_alpha is not None:
+        cfg.selector_alpha = args.selector_alpha
+    if args.selector_beta is not None:
+        cfg.selector_beta = args.selector_beta
+    if args.filter_order:
+        order = [name.strip() for name in args.filter_order.split(",") if name.strip()]
+        if order:
+            cfg.filters.filter_order = order
     run_pipeline(cfg)
