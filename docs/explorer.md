@@ -8,8 +8,8 @@ the actual frames side by side.
 
 Two frontends share the same algorithms (`embedding_explorer_tool/algorithms.py`):
 
-- **Web app** — everything in one browser window, interactive Plotly 3D.
-- **tkinter app** — offline desktop mirror with embedded matplotlib 3D.
+- **Web app** — everything in one browser window, interactive Plotly **3D**.
+- **tkinter app** — offline desktop mirror with an embedded matplotlib **2D** scatter.
 
 ## Inputs
 
@@ -111,8 +111,9 @@ python -m embedding_explorer_tool.gui_tk
 python -m embedding_explorer_tool.gui_tk --output_dir ./outputs --data_root /path/to/bottle
 ```
 
-Same controls and semantics as the web app, with an embedded matplotlib 3D
-scatter. Requires a graphical session (no Xvfb available on the current host).
+Same controls and semantics as the web app, with an embedded matplotlib **2D**
+MDS scatter (the web app keeps the interactive 3D view). Requires a graphical
+session (no Xvfb available on the current host).
 
 ## Module layout
 

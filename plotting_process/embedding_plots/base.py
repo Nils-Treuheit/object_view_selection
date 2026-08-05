@@ -3,7 +3,20 @@ from matplotlib import pyplot as plt
 from sklearn.metrics import pairwise_distances
 
 
-def _reduce_embeddings(embeddings, method, selected_idx=None, n_components=2, random_state=0, **kwargs):
+def kmeans_cluster_labels(embeddings, n_clusters):
+    """k-means cluster assignment over the rows of ``embeddings``.
+
+    ``n_clusters`` is clamped to the valid range [2, n] so the result is
+    always a usable set of class labels for LDA / cluster-coloured plots.
+    """
+    from sklearn.cluster import KMeans
+
+    n = len(embeddings)
+    k = max(2, min(n_clusters or 2, n))
+    return KMeans(n_clusters=k, random_state=0, n_init=10).fit_predict(embeddings)
+
+
+def _reduce_embeddings(embeddings, method, selected_idx=None, n_components=2, random_state=0, labels=None, **kwargs):
     n = len(embeddings)
     if method == "pca":
         from sklearn.decomposition import PCA
@@ -39,10 +52,16 @@ def _reduce_embeddings(embeddings, method, selected_idx=None, n_components=2, ra
         return coords, extra
     elif method == "lda":
         from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
-        if selected_idx is None:
-            raise ValueError("LDA requires selected_idx")
-        labels = np.zeros(len(embeddings), dtype=int)
-        labels[list(selected_idx)] = 1
+        # Class labels: when provided (k-means clusters over the embedding
+        # space) LDA gets n_classes - 1 components, so 2D/3D work for
+        # k >= 3. Without labels it falls back to selected vs. non-selected,
+        # which is capped at a single component.
+        if labels is None:
+            if selected_idx is None:
+                raise ValueError("LDA requires selected_idx")
+            labels = np.zeros(len(embeddings), dtype=int)
+            labels[list(selected_idx)] = 1
+        labels = np.asarray(labels)
         n_classes = len(np.unique(labels))
         nc = min(n_components, n_classes - 1)
         model = LinearDiscriminantAnalysis(n_components=nc)

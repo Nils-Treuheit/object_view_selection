@@ -62,6 +62,7 @@
 const plotDiv = document.getElementById("plot3d");
 const textOut = document.getElementById("textout");
 const frameView = document.getElementById("frameview");
+let hoverBound = false;
 
 async function run() {
   const k = parseInt(document.getElementById("k_input").value, 10) || 8;
@@ -77,7 +78,16 @@ async function run() {
     textOut.textContent = "Error: " + err.message;
     return;
   }
-  Plotly.react(plotDiv, data.figure.data, data.figure.layout, { responsive: true });
+  try {
+    Plotly.react(plotDiv, data.figure.data, data.figure.layout, { responsive: true });
+    if (!hoverBound && plotDiv.on) {
+      plotDiv.on("plotly_hover", onHover);
+      hoverBound = true;
+    }
+  } catch (err) {
+    textOut.textContent = "Error rendering plot: " + err.message;
+    return;
+  }
   textOut.textContent = data.text;
   if (data.picks && data.picks.length && !frameView.getAttribute("src")) {
     showFrame(data.picks[0]);
@@ -94,12 +104,12 @@ function showFrame(id) {
   frameView.setAttribute("src", "/composite/" + id + ".png");
 }
 
-plotDiv.on("plotly_hover", function (ev) {
+function onHover(ev) {
   if (!ev.points || !ev.points.length) return;
   const pt = ev.points[0];
   const id = pt.customdata ? pt.customdata[0] : null;
   if (id !== null && id !== undefined) showFrame(id);
-});
+}
 
 document.getElementById("run_btn").addEventListener("click", run);
 document.getElementById("show_btn").addEventListener("click", function () { showFrame(); });

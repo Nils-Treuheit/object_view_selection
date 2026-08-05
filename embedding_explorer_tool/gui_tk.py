@@ -1,11 +1,10 @@
 """tkinter + embedded matplotlib mirror of the embedding explorer.
 
-Same layout as the web app but fully offline in a desktop window: an embedded
-matplotlib 3D MDS scatter on the left (cluster colours, quality-linked alpha,
-stars for centroids, black-outlined dots for xNN candidates), an image viewer
-with the mask overlay on the right, a scrollable text output with the centroid
-frame IDs and the constrained xNN dictionary, and text fields for k, x and a
-frame ID.
+Same semantics as the web app but fully offline in a desktop window with a
+**2D** MDS scatter on the left (cluster colours, quality-linked alpha, stars
+for centroids, black-outlined dots for xNN candidates), an image viewer with
+the mask overlay and a scrollable text output on the right, and text fields
+for k, x and a frame ID.
 
 Run::
 
@@ -23,6 +22,7 @@ import numpy as np
 matplotlib.use("TkAgg")
 
 import tkinter as tk
+import tkinter.font as tkfont
 from tkinter import scrolledtext, ttk
 
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
@@ -35,6 +35,10 @@ try:
 except ImportError:
     import algorithms
 
+UI_FONT_FAMILY = "DejaVu Sans"
+MONO_FONT_FAMILY = "DejaVu Sans Mono"
+RIGHT_PADDING = 10
+
 
 def _cluster_palette(n):
     cmap = plt.get_cmap("tab20")
@@ -42,7 +46,7 @@ def _cluster_palette(n):
 
 
 def plot_result(ax, coords, quality, labels, result, pool_ids):
-    """Draw the 3D MDS scatter for one kMeans + xNN run on ``ax``.
+    """Draw the 2D MDS scatter for one kMeans + xNN run on ``ax``.
 
     Returns a list of ``(artist_id, frame_ids)`` used to resolve pick events.
     """
@@ -54,7 +58,7 @@ def plot_result(ax, coords, quality, labels, result, pool_ids):
     k = result["k"]
     palette = _cluster_palette(k)
 
-    x, y, z = coords[:, 0], coords[:, 1], coords[:, 2]
+    x, y = coords[:, 0], coords[:, 1]
     ax.clear()
     mapping = []
 
@@ -64,8 +68,8 @@ def plot_result(ax, coords, quality, labels, result, pool_ids):
             continue
         rgba = [(palette[c][0], palette[c][1], palette[c][2], float(a)) for a in quality[mask]]
         artist = ax.scatter(
-            x[mask], y[mask], z[mask],
-            s=30, c=rgba, depthshade=False,
+            x[mask], y[mask],
+            s=32, c=rgba,
             label="Pool samples" if c == 0 else None,
             picker=6,
         )
@@ -74,8 +78,8 @@ def plot_result(ax, coords, quality, labels, result, pool_ids):
         cand = np.asarray(clusters[c]["candidates"], dtype=int)
         cand_colors = [palette[c][:3]] * len(cand)
         artist = ax.scatter(
-            x[cand], y[cand], z[cand],
-            s=90, c=cand_colors, depthshade=False,
+            x[cand], y[cand],
+            s=110, c=cand_colors,
             edgecolors="black", linewidths=1.8, picker=6,
         )
         mapping.append((id(artist), ids[cand]))
@@ -83,8 +87,8 @@ def plot_result(ax, coords, quality, labels, result, pool_ids):
     medoid = np.asarray([clusters[c]["medoid"] for c in range(k)], dtype=int)
     medoid_colors = [palette[c][:3] for c in range(k)]
     artist = ax.scatter(
-        x[medoid], y[medoid], z[medoid],
-        s=320, c=medoid_colors, marker="*", depthshade=False,
+        x[medoid], y[medoid],
+        s=360, c=medoid_colors, marker="*",
         edgecolors="black", linewidths=1.0, label="Centroid (medoid frame)",
         picker=8,
     )
@@ -92,31 +96,32 @@ def plot_result(ax, coords, quality, labels, result, pool_ids):
 
     picks = np.asarray(result["picks"], dtype=int)
     artist = ax.scatter(
-        x[picks], y[picks], z[picks],
-        s=260, c="#FFD700", marker="*", depthshade=False,
+        x[picks], y[picks],
+        s=300, c="#FFD700", marker="*",
         edgecolors="black", linewidths=1.2, label="Final pick",
         picker=8,
     )
     mapping.append((id(artist), ids[picks]))
 
-    ax.scatter([], [], [], s=30, c="grey", label="xNN candidates")
+    ax.scatter([], [], s=32, c="grey", label="xNN candidates")
     ax.set_xlabel("MDS-1")
     ax.set_ylabel("MDS-2")
-    ax.set_zlabel("MDS-3")
-    ax.set_title(f"3D MDS of kMeans clusters (k={k}, init={result['init']}, xNN={result['x']})")
-    ax.legend(loc="upper left", fontsize=8)
-    ax.margins(0.1)
+    ax.set_title(f"2D MDS of kMeans clusters (k={k}, init={result['init']}, xNN={result['x']})")
+    ax.legend(loc="upper left", fontsize=8, framealpha=0.7)
+    ax.margins(0.08)
     return mapping
 
 
 class ExplorerApp:
     def __init__(self, root, output_dir, data_root):
         self.root = root
+        self._configure_fonts()
+
         self.snapshot = algorithms.load_snapshot(output_dir)
         self.embeddings = self.snapshot["embeddings"]
         self.pool_ids = self.snapshot["pool_ids"]
         self.quality = self.snapshot["quality"]
-        self.coords = algorithms.project_mds(self.embeddings)
+        self.coords = algorithms.project_mds(self.embeddings, n_components=2)
 
         root_path = Path(data_root) if data_root else Path(self.snapshot.get("data_root") or "")
         self.data_root = root_path
@@ -130,11 +135,20 @@ class ExplorerApp:
         self._build_widgets()
         self.run(8, "farthest", 3)
 
+    def _configure_fonts(self):
+        default = tkfont.nametofont("TkDefaultFont")
+        default.configure(family=UI_FONT_FAMILY, size=11)
+        for name in ("TkTextFont", "TkMenuFont", "TkHeadingFont"):
+            try:
+                tkfont.nametofont(name).configure(family=UI_FONT_FAMILY, size=11)
+            except tk.TclError:
+                pass
+
     def _build_widgets(self):
         self.root.title("Embedding Explorer — Top kMeans in xNN Quality Neighborhood")
-        self.root.geometry("1500x900")
+        self.root.geometry("1400x880")
 
-        top = ttk.Frame(self.root, padding=6)
+        top = ttk.Frame(self.root, padding=(12, 8))
         top.pack(side=tk.TOP, fill=tk.X)
 
         ttk.Label(top, text="k (clusters):").pack(side=tk.LEFT)
@@ -150,7 +164,7 @@ class ExplorerApp:
         self.x_var = tk.StringVar(value="3")
         ttk.Entry(top, textvariable=self.x_var, width=6).pack(side=tk.LEFT, padx=(2, 12))
 
-        ttk.Button(top, text="Run", command=self._on_run).pack(side=tk.LEFT, padx=(0, 20))
+        ttk.Button(top, text="Run", command=self._on_run).pack(side=tk.LEFT, padx=(0, 24))
 
         ttk.Label(top, text="Frame ID:").pack(side=tk.LEFT)
         self.frame_var = tk.StringVar(value="0")
@@ -159,26 +173,35 @@ class ExplorerApp:
 
         main = ttk.Frame(self.root)
         main.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+        main.columnconfigure(0, weight=55)
+        main.columnconfigure(1, weight=45)
+        main.rowconfigure(0, weight=1)
 
         left = ttk.Frame(main)
-        left.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        self.fig = Figure(figsize=(8, 8), dpi=100, facecolor="#15171e")
-        self.ax = self.fig.add_subplot(111, projection="3d")
+        left.grid(row=0, column=0, sticky="nsew")
+        self.fig = Figure(figsize=(7, 6.5), dpi=110, facecolor="#15171e")
+        self.ax = self.fig.add_subplot(111)
         self.ax.set_facecolor("#0d0f14")
+        self.fig.subplots_adjust(left=0.07, right=0.98, top=0.94, bottom=0.08)
         self.canvas = FigureCanvasTkAgg(self.fig, master=left)
         self.canvas.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True)
         self.canvas.mpl_connect("pick_event", self._on_pick)
 
-        right = ttk.Frame(main, width=480)
-        right.pack(side=tk.RIGHT, fill=tk.Y, padx=(6, 0))
-        right.pack_propagate(False)
+        right = ttk.Frame(main, padding=(0, 0, RIGHT_PADDING, RIGHT_PADDING))
+        right.grid(row=0, column=1, sticky="nsew")
+        right.columnconfigure(0, weight=1)
+        right.rowconfigure(0, weight=3)
+        right.rowconfigure(1, weight=2)
 
-        self.image_label = ttk.Label(right, anchor="center")
-        self.image_label.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+        self.image_label = tk.Label(right, anchor="center", background="#000")
+        self.image_label.grid(row=0, column=0, sticky="nsew", pady=(0, 8))
 
-        self.text_out = scrolledtext.ScrolledText(right, wrap=tk.NONE, state=tk.DISABLED,
-                                                  font=("Consolas", 11))
-        self.text_out.pack(side=tk.BOTTOM, fill=tk.BOTH, expand=True)
+        self.text_out = scrolledtext.ScrolledText(
+            right, wrap=tk.NONE, state=tk.DISABLED,
+            font=(MONO_FONT_FAMILY, 11), background="#0d0f14", foreground="#e6e6e6",
+            insertbackground="#e6e6e6",
+        )
+        self.text_out.grid(row=1, column=0, sticky="nsew")
 
     def run(self, k, init, x):
         self.result = algorithms.run_kmeans_xnn(self.embeddings, self.quality, k, init, x)
@@ -236,7 +259,7 @@ class ExplorerApp:
         mask = cv2.imread(str(mask_path), cv2.IMREAD_GRAYSCALE)
         out = algorithms.compose_mask_overlay(image, mask)
         pil = Image.fromarray(out)
-        pil.thumbnail((520, 520))
+        pil.thumbnail((640, 640))
         self._image_cache[frame_id] = pil
         return pil
 

@@ -172,11 +172,11 @@ def run_kmeans_xnn(embeddings, quality, k: int, init: str = "farthest", x: int =
     }
 
 
-def project_mds(embeddings, random_state: int = 0):
-    """Project the pool into 3D with metric MDS over cosine distance."""
+def project_mds(embeddings, n_components: int = 3, random_state: int = 0):
+    """Project the pool into ``n_components`` dims with metric MDS over cosine distance."""
     dist = pairwise_distances(embeddings, metric="cosine")
     mds = MDS(
-        n_components=3,
+        n_components=n_components,
         metric=True,
         dissimilarity="precomputed",
         random_state=random_state,
