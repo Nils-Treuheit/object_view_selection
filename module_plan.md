@@ -609,22 +609,28 @@ Save Outputs
 ```text
 outputs/
 │
-├── selected/
-│   ├── 00013.png
-│   ├── 00047.png
-│   └── ...
+├── selected_samples/
+│   └── <obj_id>/
+│       ├── rgb/
+│       │   ├── 00013.png
+│       │   ├── 00047.png
+│       │   └── ...
+│       ├── mask/
+│       ├── depth/           # only when <data_root>/depth exists
+│       └── hand_mask/       # only when a hand mask is available
 │
-├── selected_masks/
-│
-├── selected_object_hands/
+├── rejected_samples/        # same layout as selected_samples/
+│   └── <obj_id>/
+│       ├── rgb/
+│       ├── mask/
+│       ├── depth/
+│       └── hand_mask/
 │
 ├── report.json
 │
 ├── quality.csv
 │
 ├── embeddings.npy
-│
-├── rejected.csv
 │
 └── visualization.png
 ```

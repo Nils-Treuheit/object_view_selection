@@ -156,6 +156,9 @@ class PipelineConfig:
     selector_alpha: float = 0.60
     selector_beta: float = 0.40
     dpp_sigma: float = 0.5
+    # Top kMeans Embedding Selection in xNN quality Neighborhood
+    kmeans_init: str = "farthest"        # "farthest" | "best_quality"
+    kmeans_xnn_k: int = 3                # xNN radius: 3 | 5 | 10
 
     quality_weights: QualityWeights = field(default_factory=QualityWeights)
     quality_anchors: QualityAnchors = field(default_factory=QualityAnchors)

@@ -251,8 +251,8 @@ def test_greedy_selector_default_balance():
     cfg = PipelineConfig(auto_thresholds=False)
     s = GreedyQualityDiversity(alpha=cfg.selector_alpha, beta=cfg.selector_beta)
     check(
-        np.isclose(cfg.selector_alpha, 0.45) and np.isclose(cfg.selector_beta, 0.55),
-        f"default balance is 0.45/0.55 (got {cfg.selector_alpha}/{cfg.selector_beta})",
+        np.isclose(cfg.selector_alpha, 0.60) and np.isclose(cfg.selector_beta, 0.40),
+        f"default balance is 0.60/0.40 (got {cfg.selector_alpha}/{cfg.selector_beta})",
     )
     check(np.isclose(s.alpha, cfg.selector_alpha), "selector uses config alpha")
 

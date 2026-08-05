@@ -1,6 +1,6 @@
 # Selection Algorithms
 
-When the pipeline has filtered, scored, and embedded the observations, the final stage chooses a subset of `n` views. Five algorithms are available, each with a different strategy for balancing **quality** (preferring high-score views) and **diversity** (covering the embedding space broadly).
+When the pipeline has filtered, scored, and embedded the observations, the final stage chooses a subset of `n` views. Six algorithms are available, each with a different strategy for balancing **quality** (preferring high-score views) and **diversity** (covering the embedding space broadly).
 
 Every algorithm implements the same interface:
 
@@ -287,6 +287,74 @@ while len(idx) < n:
 
 ---
 
+## 6. Top kMeans Embedding Selection in xNN quality Neighborhood
+
+**File:** `selection/kmeans_xnn.py`
+
+### Core Idea
+
+Run k-means over the embedding pool with `k = n` (one cluster per requested view), then for every cluster pick the **best-quality** pool sample from the cluster centroid's **xNN neighbourhood** instead of blindly taking the centroid itself. The neighbourhood is `{centroid} ∪ {its x nearest neighbours}` — so a slightly lower-quality-but-far-from-centroid sample can win as long as it stays inside the `xNN` radius, while far outliers are kept out.
+
+The neighbourhood comes with one hard constraint: a nearest neighbour may only be a candidate for a centroid if it is closer to *that* centroid than to any other centroid (i.e. it is a member of the cluster in question). Neighbours that actually belong to a neighbouring cluster are dropped; if the whole neighbourhood is dropped, the cluster's medoid (the pool sample closest to the centroid) is used as a fallback.
+
+### Algorithm
+
+```
+1. Choose k = n cluster centres:
+   - "farthest"      farthest-point sampling over the embedding space
+                     (deterministic: starts at the highest-quality sample,
+                     then repeatedly the point farthest from the chosen seeds)
+   - "best_quality"  the k highest-quality samples
+2. Run k-means (fixed seeds, n_init=1) over the pool.
+3. For every cluster c with centre μ_c:
+   a. raw neighbourhood = the x + 1 pool samples nearest to μ_c
+      (the centroid itself plus its x nearest neighbours).
+   b. constraint: keep only candidates whose k-means cluster is c —
+      a candidate is not allowed to be closer to another centroid than to μ_c.
+      Fall back to the cluster medoid when nothing survives.
+   c. pick the candidate with the highest quality.
+```
+
+### Pseudocode
+
+```python
+seeds = _fps_seeds(embeddings, quality)        # or _quality_seeds(quality)
+km = KMeans(n_clusters=k, init=embeddings[seeds], n_init=1, random_state=0)
+labels, centers = km.fit_predict(embeddings), km.cluster_centers_
+
+for c in range(k):
+    dist_c = cosine_dist(embeddings, centers[c])
+    cands  = [p for p in argsort(dist_c)[:x + 1] if labels[p] == c]   # constraint
+    if not cands:
+        cands = [medoid of cluster c]
+    picks.append(cands[argmax(quality[cands])])
+```
+
+### Parameters
+
+| Parameter | Default | Effect |
+|-----------|---------|--------|
+| `kmeans_init` | `farthest` | Cluster seeding. `farthest` spreads seeds via farthest-point sampling; `best_quality` seeds at the top-quality samples |
+| `kmeans_xnn_k` | `3` | xNN radius — neighbourhood size is `{centroid} + x nearest neighbours` (values `3`, `5`, `10`) |
+
+### Properties
+
+| Property | Value |
+|----------|-------|
+| Quality-aware | Yes (best quality within each cluster's neighbourhood) |
+| Deterministic | Yes (fixed seeds, `random_state=0`, stable tie-breaks) |
+| Diversity | Cluster-based — one pick per k-means cluster covers distinct embedding regions |
+| Constraint | xNN candidates must not be closer to another centroid than to their own |
+| Complexity | O(N · n · d) k-means + O(n · N) neighbourhood lookups |
+
+### When to Use
+
+- When you want a cluster-representative selection that still prefers quality.
+- When you suspect the greedy selectors are pairing near-duplicate views (the user-observed 84/89 case) — one pick per cluster avoids redundant neighbours.
+- `best_quality` seeding when cluster coverage matters less than hitting the best views; `farthest` when seeds should span the space first.
+
+---
+
 ## Comparison Summary
 
 | Algorithm | Quality-aware | Deterministic | Diversity strategy | Metric | Complexity |
@@ -296,12 +364,13 @@ while len(idx) < n:
 | **Facility Location** | — | ✓ | Coverage (max-similarity sum) | Cosine | O(n·N²) |
 | **DPP** | Quality-weighted kernel | ✓ | Determinant (anti-redundancy) | RBF(cosine) | O(n·N·k³) |
 | **NBV** | quality + 0.5 · diversity | ✓ | Mean distance to selected set | Euclidean | O(n·N) |
+| **kMeans-xNN** | best quality in xNN | ✓ | One pick per k-means cluster | Cosine | O(N·n·d) |
 
 ## CLI Selection
 
 ```bash
 # Greedy Quality-Diversity (default)
-python run.py --selector quality_diversity --selector_alpha 0.4 --selector_beta 0.6
+python run.py --selector quality_diversity --selector_alpha 0.60 --selector_beta 0.40
 
 # Farthest Point Sampling
 python run.py --selector fps
@@ -314,4 +383,9 @@ python run.py --selector dpp
 
 # Next Best View
 python run.py --selector next_best_view
+
+# Top kMeans Embedding Selection in xNN quality Neighborhood
+python run.py --selector top_kmeans_xnn                          # init=farthest, xNN k=3
+python run.py --selector top_kmeans_xnn --kmeans_init best_quality
+python run.py --selector top_kmeans_xnn --kmeans_init farthest --kmeans_xnn_k 10
 ```

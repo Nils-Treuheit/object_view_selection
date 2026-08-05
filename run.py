@@ -245,6 +245,9 @@ def build_selector(cfg: PipelineConfig):
     elif name == "next_best_view":
         from selection.next_best_view import NextBestView
         return NextBestView()
+    elif name == "top_kmeans_xnn":
+        from selection.kmeans_xnn import TopKMeansXNN
+        return TopKMeansXNN(init=cfg.kmeans_init, xnn_k=cfg.kmeans_xnn_k)
     else:
         raise ValueError(f"Unknown selector: {name}")
 
@@ -287,21 +290,21 @@ def compute_quality_floor(quality_scores, num_views: int, cfg) -> float:
     return float(floor)
 
 
-def save_selected_samples(selected, data_root, output_dir):
-    """Copy the final selected tuples into ``selected_samples/<obj_id>/``.
+def _save_samples(observations, kind, data_root, output_dir):
+    """Copy observations into ``{kind}_samples/<obj_id>/{rgb,mask,depth?,hand_mask?}``.
 
     The ``<obj_id>`` folder is named exactly like the last component of
     ``data_root``. Under it the frames are re-organized into:
 
-      rgb/          selected object images
-      mask/         selected object masks
+      rgb/          object images
+      mask/         object masks
       depth/        frame-wise depth information (only when a matching file
                     exists in ``<data_root>/depth``)
       hand_mask/    hand masks (only when a hand mask exists for the frame)
     """
     root = Path(data_root)
     obj_id = root.name or "dataset"
-    base = Path(output_dir) / "selected_samples" / obj_id
+    base = Path(output_dir) / f"{kind}_samples" / obj_id
 
     rgb_dir = base / "rgb"
     mask_dir = base / "mask"
@@ -323,7 +326,7 @@ def save_selected_samples(selected, data_root, output_dir):
             if p.stem.isdigit():
                 hand_map[int(p.stem)] = p
 
-    for obs in selected:
+    for obs in observations:
         stem = f"{obs.id:05d}"
         if obs.image is not None:
             cv2.imwrite(str(rgb_dir / f"{stem}.png"),
@@ -349,18 +352,27 @@ def save_selected_samples(selected, data_root, output_dir):
             if hp is not None:
                 shutil.copy(str(hp), str(hand_mask_dir / hp.name))
 
-    print(f"Selected samples saved to {base}")
+    print(f"{kind.capitalize()} samples saved to {base}")
     return base
+
+
+def save_selected_samples(selected, data_root, output_dir):
+    """Copy the final selected tuples into ``selected_samples/<obj_id>/``."""
+    return _save_samples(selected, "selected", data_root, output_dir)
+
+
+def save_rejected_samples(rejected, data_root, output_dir):
+    """Copy the rejected tuples into ``rejected_samples/<obj_id>/``.
+
+    Mirrors ``save_selected_samples``: same ``rgb/``, ``mask/``, ``depth/``
+    and ``hand_mask/`` layout under a folder named after ``data_root``.
+    """
+    return _save_samples(rejected, "rejected", data_root, output_dir)
 
 
 def run_pipeline(cfg: PipelineConfig):
     output_dir = Path(cfg.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    (output_dir / "selected").mkdir(parents=True, exist_ok=True)
-    (output_dir / "selected_masks").mkdir(parents=True, exist_ok=True)
-    (output_dir / "selected_object_hands").mkdir(parents=True, exist_ok=True)
-    (output_dir / "rejected").mkdir(parents=True, exist_ok=True)
-    (output_dir / "rejected_masks").mkdir(parents=True, exist_ok=True)
 
     dataset = Dataset(cfg.data_root)
     dataset.load_images()
@@ -528,24 +540,11 @@ def run_pipeline(cfg: PipelineConfig):
         np.save(output_dir / "selected_indices.npy", selected_idx)
         np.save(output_dir / "selection_pool_ids.npy", np.array([obs.id for obs in pool]))
 
-    for obs in selected:
-        stem = f"{obs.id:05d}"
-        cv2.imwrite(str(output_dir / "selected" / f"{stem}.png"),
-                     cv2.cvtColor(obs.image, cv2.COLOR_RGB2BGR))
-        cv2.imwrite(str(output_dir / "selected_masks" / f"{stem}.png"), obs.mask)
-        if obs.object_hand is not None:
-            cv2.imwrite(str(output_dir / "selected_object_hands" / f"{stem}.png"), obs.object_hand)
-
     if selected:
         save_selected_samples(selected, cfg.data_root, output_dir)
 
     if cfg.save_rejected:
-        for obs in rejected:
-            stem = f"{obs.id:05d}"
-            cv2.imwrite(str(output_dir / "rejected" / f"{stem}.png"),
-                         cv2.cvtColor(obs.image, cv2.COLOR_RGB2BGR))
-            cv2.imwrite(str(output_dir / "rejected_masks" / f"{stem}.png"), obs.mask)
-
+        save_rejected_samples(rejected, cfg.data_root, output_dir)
     rejected_data = [
         {"id": obs.id, "reason": obs.rejection_reason}
         for obs in rejected
@@ -706,13 +705,24 @@ if __name__ == "__main__":
     parser.add_argument("--embedding_model", type=str, default="facebook/dinov3-vitb16-pretrain-lvd1689m",
                         help="Model name or path; type inferred automatically when --embedding=auto")
     parser.add_argument("--selector", type=str, default="quality_diversity",
-                        choices=["fps", "quality_diversity", "facility_location", "dpp", "next_best_view"])
+                        choices=["fps", "quality_diversity", "facility_location", "dpp",
+                                 "next_best_view", "top_kmeans_xnn"])
     parser.add_argument("--selector_alpha", type=float, default=None,
                         help="Quality weight for the quality_diversity (GQD) selector "
                              "(default: config value 0.60)")
     parser.add_argument("--selector_beta", type=float, default=None,
                         help="Diversity weight for the quality_diversity (GQD) selector "
                              "(default: config value 0.40)")
+    parser.add_argument("--kmeans_init", type=str, default=None,
+                        choices=["farthest", "best_quality"],
+                        help="k-means cluster-init for the top_kmeans_xnn selector: "
+                             "farthest-point seeds or best-quality seeds "
+                             "(default: config value 'farthest')")
+    parser.add_argument("--kmeans_xnn_k", type=int, default=None,
+                        choices=[3, 5, 10],
+                        help="xNN neighbourhood radius for the top_kmeans_xnn selector: "
+                             "pick the best-quality sample among the centroid plus its "
+                             "x nearest neighbours (default: config value 3)")
     parser.add_argument("--filter_order", type=str, default=None,
                         help="Comma-separated pre-filter application order, e.g. "
                              "'vincent_empty_mask,vincent_border_pixel,border,area,"
@@ -747,6 +757,10 @@ if __name__ == "__main__":
         cfg.selector_alpha = args.selector_alpha
     if args.selector_beta is not None:
         cfg.selector_beta = args.selector_beta
+    if args.kmeans_init is not None:
+        cfg.kmeans_init = args.kmeans_init
+    if args.kmeans_xnn_k is not None:
+        cfg.kmeans_xnn_k = args.kmeans_xnn_k
     if args.filter_order:
         order = [name.strip() for name in args.filter_order.split(",") if name.strip()]
         if order:

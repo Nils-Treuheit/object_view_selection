@@ -377,23 +377,41 @@ Designed for datasets with camera pose information (e.g., NeRF, Gaussian Splatti
 1. Start with highest quality.
 2. Greedily pick the remaining observation with the best quality+diversity score.
 
+### TopKMeansXNN (Top kMeans Embedding Selection in xNN quality Neighborhood)
+
+**Objective:** one pick per k-means cluster — the best-quality pool sample inside the cluster centroid's `{centroid + xNN}` neighbourhood.
+
+**Algorithm:**
+1. Run k-means with `k = num_views`; seed centres by farthest-point sampling (`kmeans_init=farthest`) or the top-quality samples (`kmeans_init=best_quality`).
+2. For each cluster, restrict the centroid's x-nearest-neighbours to samples closer to *this* centroid than any other (cluster members only), fall back to the medoid.
+3. Pick the highest-quality candidate from that constrained set.
+
+**Parameters:** `kmeans_init` (`farthest`/`best_quality`), `kmeans_xnn_k` (3/5/10).
+
 ---
 
 ## Stage 5: Outputs
 
 ```
 outputs/
-├── selected/               # Selected images
-├── selected_masks/         # Corresponding masks
-├── selected_object_hands/  # Corresponding hand masks (if available)
-├── rejected/               # Rejected images
-├── rejected_masks/         # Rejected masks
 ├── report.json             # Full pipeline report + selection metrics
 ├── quality.csv             # Per-observation quality metrics
 ├── embeddings.npy          # Embedding matrix (accepted pool)
 ├── selected_indices.npy    # Indices into embeddings.npy
 ├── rejected.json           # Rejection reasons
-└── visualization.png       # Overview grid of selected views
+├── visualization.png       # Overview grid of selected views
+├── selected_samples/       # Selected tuples, re-organized by data type:
+│   └── <obj_id>/           #   named after the last component of data_root
+│       ├── rgb/            #   selected object images
+│       ├── mask/           #   selected object masks
+│       ├── depth/          #   only when <data_root>/depth exists
+│       └── hand_mask/      #   only when a hand mask is available
+└── rejected_samples/       # Rejected tuples, same layout as selected_samples/
+    └── <obj_id>/
+        ├── rgb/
+        ├── mask/
+        ├── depth/
+        └── hand_mask/
 ```
 
 ### report.json includes:

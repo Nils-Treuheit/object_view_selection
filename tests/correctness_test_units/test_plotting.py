@@ -966,6 +966,70 @@ def test_selected_samples_export():
         check(not (base / "hand_mask").exists(), "no hand_mask folder without hand data")
 
 
+def test_rejected_samples_export():
+    """save_rejected_samples mirrors selected_samples/<obj_id>/{rgb,mask,depth?,hand_mask?}."""
+    from data_io.observation import Observation
+    from run import save_rejected_samples
+
+    img = np.full((32, 32, 3), 120, dtype=np.uint8)
+    msk = np.full((32, 32), 255, dtype=np.uint8)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp) / "bottle_obj"
+        (root / "images").mkdir(parents=True)
+        (root / "masks").mkdir(parents=True)
+        (root / "object_hands").mkdir(parents=True)
+        (root / "depth").mkdir(parents=True)
+        for i in range(3):
+            cv2.imwrite(str(root / "images" / f"{i:05d}.png"), img)
+            cv2.imwrite(str(root / "masks" / f"{i:05d}.png"), msk)
+            cv2.imwrite(str(root / "object_hands" / f"{i:05d}.png"), msk)
+            np.save(root / "depth" / f"{i:05d}.npy", img.astype(np.float32))
+
+        out = Path(tmp) / "results"
+        rejected = [
+            Observation(
+                id=i,
+                image_path=root / "images" / f"{i:05d}.png",
+                mask_path=root / "masks" / f"{i:05d}.png",
+                object_hand_path=root / "object_hands" / f"{i:05d}.png",
+                image=cv2.cvtColor(cv2.imread(str(root / "images" / f"{i:05d}.png")),
+                                   cv2.COLOR_BGR2RGB),
+                mask=msk,
+                object_hand=msk,
+            )
+            for i in range(3)
+        ]
+
+        base = save_rejected_samples(rejected, str(root), out)
+        check(base.name == "bottle_obj", f"obj_id folder named after data_root (got {base.name})")
+        for i in range(3):
+            check((base / "rgb" / f"{i:05d}.png").exists(), f"rgb/{i:05d}.png saved")
+            check((base / "mask" / f"{i:05d}.png").exists(), f"mask/{i:05d}.png saved")
+            check((base / "depth" / f"{i:05d}.npy").exists(), f"depth/{i:05d}.npy saved")
+            check((base / "hand_mask" / f"{i:05d}.png").exists(), f"hand_mask/{i:05d}.png saved")
+
+    # dataset without depth / hand data: those subfolders are skipped
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp) / "nodepth"
+        (root / "images").mkdir(parents=True)
+        (root / "masks").mkdir(parents=True)
+        cv2.imwrite(str(root / "images" / "00000.png"), img)
+        cv2.imwrite(str(root / "masks" / "00000.png"), msk)
+
+        out = Path(tmp) / "out2"
+        rejected = [Observation(
+            id=0,
+            image_path=root / "images" / "00000.png",
+            mask_path=root / "masks" / "00000.png",
+            object_hand_path=None,
+        )]
+        base = save_rejected_samples(rejected, str(root), out)
+        check((base / "rgb" / "00000.png").exists(), "rgb saved without depth data")
+        check(not (base / "depth").exists(), "no depth folder without depth data")
+        check(not (base / "hand_mask").exists(), "no hand_mask folder without hand data")
+
+
 def test_filter_order_cli_override():
     """--filter_order reorders the pre-filter pipeline; default is the config order."""
     import run

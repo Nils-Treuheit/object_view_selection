@@ -85,6 +85,14 @@ python run.py --data_root /path/to/bottle --selector dpp --num_views 10
 python run.py --data_root /path/to/bottle \
   --selector quality_diversity --selector_alpha 0.3 --selector_beta 0.7
 
+# Top kMeans Embedding Selection in xNN quality Neighborhood
+#   --kmeans_init   farthest | best_quality  (cluster seeding)
+#   --kmeans_xnn_k  3 | 5 | 10               (neighbourhood radius)
+python run.py --data_root /path/to/bottle \
+  --selector top_kmeans_xnn --kmeans_init farthest --kmeans_xnn_k 5
+python run.py --data_root /path/to/bottle \
+  --selector top_kmeans_xnn --kmeans_init best_quality --kmeans_xnn_k 10
+
 # Custom pre-filter order (comma-separated, defaults to the config order)
 python run.py --data_root /path/to/bottle \
   --filter_order "blur,area,border,occlusion,confidence,completeness"
@@ -125,9 +133,11 @@ If `--output_dir` is omitted, the `plots/` folder is created inside `--input_dir
 | `--num_views` | `10` | Number of views to select |
 | `--embedding` | `auto` | `auto`, `dinov3`, `dinov2`, `siglip2`, `siglip`, `moonvit`, `clip`, `eva_clip` |
 | `--embedding_model` | `facebook/dinov3-vitb16-pretrain-lvd1689m` | Model name or path; type inferred automatically when `--embedding=auto` |
-| `--selector` | `quality_diversity` | `fps`, `quality_diversity`, `facility_location`, `dpp`, `next_best_view` |
+| `--selector` | `quality_diversity` | `fps`, `quality_diversity`, `facility_location`, `dpp`, `next_best_view`, `top_kmeans_xnn` |
 | `--selector_alpha` | `0.60` | Quality weight for GQD selector |
 | `--selector_beta` | `0.40` | Diversity weight for GQD selector |
+| `--kmeans_init` | `farthest` | k-means cluster-init for `top_kmeans_xnn`: `farthest` (farthest-point seeds) or `best_quality` (top-quality seeds) |
+| `--kmeans_xnn_k` | `3` | xNN neighbourhood radius for `top_kmeans_xnn`: `3`, `5`, or `10` |
 | `--filter_order` | config default | Comma-separated pre-filter order, e.g. `vincent_empty_mask,vincent_border_pixel,border,area,confidence,blur,occlusion,completeness` |
 | `--use_shape_descriptors` | `False` | Use classical shape descriptors (CPU) |
 | `--shape_descriptor` | `hu` | `hu`, `zernike`, `fourier`, `shape_context` |
@@ -137,11 +147,6 @@ If `--output_dir` is omitted, the `plots/` folder is created inside `--input_dir
 
 ```
 outputs/
-├── selected/              # Selected images (PNG)
-├── selected_masks/        # Corresponding masks
-├── selected_object_hands/ # Corresponding hand masks (if available)
-├── rejected/              # Rejected images (if save_rejected=True)
-├── rejected_masks/        # Rejected masks
 ├── report.json            # Pipeline summary + selection metrics
 ├── quality.csv            # Per-observation quality metrics
 ├── embeddings.npy         # Embedding matrix (accepted pool)
@@ -156,6 +161,13 @@ outputs/
 │       ├── mask/          #   selected object masks
 │       ├── depth/         #   frame-wise depth (only when <data_root>/depth exists)
 │       └── hand_mask/     #   hand masks (only when a hand mask is available)
+│
+├── rejected_samples/      # Rejected tuples, same layout as selected_samples/
+│   └── <obj_id>/
+│       ├── rgb/
+│       ├── mask/
+│       ├── depth/         #   only when <data_root>/depth exists
+│       └── hand_mask/     #   only when a hand mask is available
 │
 ├── bad_examples/          # Per-stage example frames (if --plot)
 │   ├── pre-filter_stage/  # <feature>_filtered.png (reason-matched) or
@@ -213,7 +225,7 @@ Their raw stats and weights are exported to `quality.csv` (`vincent_*` / `vincen
 
 ## Testing
 
-The project has **190 correctness test functions** (609 check assertions) and **51 smoke test checks** (including the Vincent hard/soft pre-filters, robust population scoring, and run.py wiring).
+The project has **200 correctness test functions** (645 check assertions) and **51 smoke test checks** (including the Vincent hard/soft pre-filters, robust population scoring, and run.py wiring).
 
 ### Correctness Tests
 
@@ -226,7 +238,7 @@ python test_correctness.py
 # or
 python tests/run_correctness.py
 
-# Expected output: Results: 190 passed, 0 failed out of 190
+# Expected output: Results: 200 passed, 0 failed out of 200
 ```
 
 ### Smoke Tests

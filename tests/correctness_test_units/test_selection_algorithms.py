@@ -381,6 +381,120 @@ def test_nbv_uses_euclidean_not_cosine():
 
 
 # ---------------------------------------------------------------------------
+# Top kMeans Embedding Selection in xNN quality Neighborhood
+# ---------------------------------------------------------------------------
+
+def test_quality_seeds_are_top_k():
+    """_quality_seeds returns the k highest-quality indices (stable ties)."""
+    from selection.kmeans_xnn import _quality_seeds
+
+    q = np.array([0.1, 0.9, 0.3, 0.7, 0.2], dtype=np.float32)
+    check(_quality_seeds(q, 3) == [1, 3, 2], f"_quality_seeds: got {_quality_seeds(q, 3)}")
+
+
+def test_fps_seeds_start_at_quality_argmax_and_spread():
+    """_fps_seeds starts at the quality argmax, then farthest by cosine dist."""
+    from selection.kmeans_xnn import _fps_seeds
+
+    emb = _onehot(5, 8)
+    q = np.array([0.3, 0.1, 0.9, 0.2, 0.7], dtype=np.float32)
+    seeds = _fps_seeds(emb, q, 3)
+    check(seeds[0] == 2, f"first seed is quality argmax (got {seeds[0]})")
+    # all onehot pairs are equidistant -> subsequent seeds are lowest unused indices
+    check(seeds == [2, 0, 1], f"spread seeds (got {seeds})")
+
+
+def test_fps_seeds_without_quality_start_at_zero():
+    """_fps_seeds falls back to index 0 when quality is uniform."""
+    from selection.kmeans_xnn import _fps_seeds
+
+    emb = _onehot(5, 8)
+    seeds = _fps_seeds(emb, np.ones(5), 2)
+    check(seeds == [0, 1], f"uniform quality seeds (got {seeds})")
+
+
+def test_candidates_constraint_excludes_other_cluster_members():
+    """xNN candidates closer to another centroid (other cluster) are dropped."""
+    from selection.kmeans_xnn import _candidates_for_center
+
+    dist = np.array([0.1, 0.2, 0.3, 0.4, 0.5])   # raw distance to this centroid
+    labels = np.array([0, 0, 1, 0, 1])            # target cluster = 0
+    cands = _candidates_for_center(dist, labels, cluster=0, x=2)
+    # raw xNN (centroid + 2 NN) = [0, 1, 2]; point 2 lives in cluster 1 -> dropped
+    check(cands == [0, 1], f"constrained candidates {cands}, expected [0, 1]")
+
+
+def test_candidates_fallback_to_cluster_medoid():
+    """When every raw neighbour belongs elsewhere, fall back to the medoid."""
+    from selection.kmeans_xnn import _candidates_for_center
+
+    dist = np.array([0.5, 0.6, 0.1, 0.2])
+    labels = np.array([0, 0, 1, 1])
+    cands = _candidates_for_center(dist, labels, cluster=0, x=0)
+    # raw set = [2] (cluster 1) -> dropped -> medoid of cluster 0 = index 0
+    check(cands == [0], f"medoid fallback {cands}, expected [0]")
+
+
+def test_top_kmeans_xnn_picks_quality_leader_per_cluster():
+    """Each cluster contributes its best-quality sample within the xNN radius."""
+    from selection.kmeans_xnn import TopKMeansXNN
+
+    emb = np.array([
+        [1.0, 0.0], [0.94, 0.34],          # cluster A (angle ~0..20 deg)
+        [-0.5, 0.866], [-0.6, 0.8],        # cluster B (angle ~120..127 deg)
+        [-0.5, -0.866], [-0.6, -0.8],      # cluster C (angle ~233..240 deg)
+    ], dtype=np.float32)
+    quality = np.array([0.9, 0.5, 0.8, 0.4, 0.7, 0.3], dtype=np.float32)
+
+    idx = TopKMeansXNN(init="best_quality", xnn_k=3).select(emb, quality, 3)
+    check(set(idx.tolist()) == {0, 2, 4},
+          f"picks {idx.tolist()}, expected the three quality leaders {{0, 2, 4}}")
+
+
+def test_top_kmeans_xnn_xnn_radius_excludes_far_outlier():
+    """The xNN radius excludes a far high-quality member outside the neighbourhood."""
+    from selection.kmeans_xnn import TopKMeansXNN
+
+    # cluster A: six unit vectors symmetric about 25 deg, quality growing with angle;
+    # the 50 deg member has the highest quality but is farthest from the centroid.
+    a = [(np.cos(np.radians(t)), np.sin(np.radians(t))) for t in range(0, 51, 10)]
+    b = [(-1.0, 0.0), (-0.98, 0.2), (-0.98, -0.2)]
+    emb = np.array(a + b, dtype=np.float32)
+    quality = np.array([0.1, 0.2, 0.3, 0.4, 0.5, 0.9, 0.6, 0.55, 0.45],
+                       dtype=np.float32)
+
+    idx = TopKMeansXNN(init="best_quality", xnn_k=3).select(emb, quality, 2)
+    # A's centroid is exactly at 25 deg; its {centroid + 3 NN} cover 10..40 deg,
+    # so the 50 deg outlier (quality 0.9) is out of reach and the 40 deg member
+    # (quality 0.5) wins. B picks its own quality leader.
+    check(set(idx.tolist()) == {4, 6},
+          f"picks {idx.tolist()}, expected {{4, 6}} (radius-excluded 50 deg outlier)")
+
+
+def test_top_kmeans_xnn_falls_back_without_quality():
+    """Without quality scores the selector still returns a full unique set."""
+    from selection.kmeans_xnn import TopKMeansXNN
+
+    rng = np.random.RandomState(0)
+    emb = rng.randn(15, 6).astype(np.float32)
+    idx = TopKMeansXNN(init="farthest", xnn_k=5).select(emb, None, 5)
+    check(len(idx) == 5, f"returns 5 picks, got {len(idx)}")
+    check(len(set(idx.tolist())) == 5, "picks are unique")
+
+
+def test_top_kmeans_xnn_init_modes_produce_different_seeds():
+    """'farthest' and 'best_quality' initialise k-means at different points."""
+    from selection.kmeans_xnn import TopKMeansXNN
+
+    emb = _onehot(5, 8)
+    quality = np.array([0.3, 0.1, 0.9, 0.2, 0.7], dtype=np.float32)
+    a = TopKMeansXNN(init="farthest", xnn_k=3).select(emb, quality, 3)
+    b = TopKMeansXNN(init="best_quality", xnn_k=3).select(emb, quality, 3)
+    check(not np.array_equal(a, b),
+          f"init modes should seed differently (farthest={a.tolist()}, best_quality={b.tolist()})")
+
+
+# ---------------------------------------------------------------------------
 # Cross-selector: diversity quality monotonicity
 # ---------------------------------------------------------------------------
 
@@ -391,6 +505,7 @@ def test_all_selectors_reject_negative_n():
     from selection.facility_location import FacilityLocation
     from selection.dpp import DPPSelector
     from selection.next_best_view import NextBestView
+    from selection.kmeans_xnn import TopKMeansXNN
 
     emb = np.eye(3, dtype=np.float32)
     q = np.ones(3, dtype=np.float32)
@@ -398,7 +513,8 @@ def test_all_selectors_reject_negative_n():
                       ("GQD", GreedyQualityDiversity),
                       ("FL", FacilityLocation),
                       ("DPP", DPPSelector),
-                      ("NBV", NextBestView)]:
+                      ("NBV", NextBestView),
+                      ("KMeansXNN", TopKMeansXNN)]:
         idx = cls().select(emb, q, 0)
         check(len(idx) == 0, f"{name} returns empty for n=0")
 
@@ -410,6 +526,7 @@ def test_all_selectors_no_duplicates():
     from selection.facility_location import FacilityLocation
     from selection.dpp import DPPSelector
     from selection.next_best_view import NextBestView
+    from selection.kmeans_xnn import TopKMeansXNN
 
     rng = np.random.RandomState(6)
     emb = rng.randn(20, 8).astype(np.float32)
@@ -419,7 +536,8 @@ def test_all_selectors_no_duplicates():
                       ("GQD", GreedyQualityDiversity),
                       ("FL", FacilityLocation),
                       ("DPP", DPPSelector),
-                      ("NBV", NextBestView)]:
+                      ("NBV", NextBestView),
+                      ("KMeansXNN", TopKMeansXNN)]:
         for n in [1, 3, 10, 15]:
             idx = cls().select(emb, q, n)
             check(len(set(idx)) == len(idx),
@@ -433,6 +551,7 @@ def test_all_selectors_clamp_n_to_embedding_count():
     from selection.facility_location import FacilityLocation
     from selection.dpp import DPPSelector
     from selection.next_best_view import NextBestView
+    from selection.kmeans_xnn import TopKMeansXNN
 
     emb = np.eye(4, dtype=np.float32)
     q = np.ones(4, dtype=np.float32)
@@ -440,7 +559,8 @@ def test_all_selectors_clamp_n_to_embedding_count():
                       ("GQD", GreedyQualityDiversity),
                       ("FL", FacilityLocation),
                       ("DPP", DPPSelector),
-                      ("NBV", NextBestView)]:
+                      ("NBV", NextBestView),
+                      ("KMeansXNN", TopKMeansXNN)]:
         idx = cls().select(emb, q, 100)
         check(len(idx) == 4, f"{name} (n=100 > N=4): returned {len(idx)}, expected 4")
 
@@ -452,6 +572,7 @@ def test_all_selectors_return_type_is_int_ndarray():
     from selection.facility_location import FacilityLocation
     from selection.dpp import DPPSelector
     from selection.next_best_view import NextBestView
+    from selection.kmeans_xnn import TopKMeansXNN
 
     emb = np.eye(3, dtype=np.float32)
     q = np.ones(3, dtype=np.float32)
@@ -459,7 +580,8 @@ def test_all_selectors_return_type_is_int_ndarray():
                       ("GQD", GreedyQualityDiversity),
                       ("FL", FacilityLocation),
                       ("DPP", DPPSelector),
-                      ("NBV", NextBestView)]:
+                      ("NBV", NextBestView),
+                      ("KMeansXNN", TopKMeansXNN)]:
         idx = cls().select(emb, q, 2)
         check(isinstance(idx, np.ndarray), f"{name} returns ndarray")
         check(idx.dtype in (np.int32, np.int64, int), f"{name} has int dtype but got {idx.dtype}")
@@ -573,6 +695,7 @@ def test_all_selectors_n_1_returns_single_index():
     from selection.facility_location import FacilityLocation
     from selection.dpp import DPPSelector
     from selection.next_best_view import NextBestView
+    from selection.kmeans_xnn import TopKMeansXNN
 
     emb = np.eye(5, dtype=np.float32)
     q = np.array([0.1, 0.9, 0.3, 0.7, 0.2], dtype=np.float32)
@@ -580,7 +703,8 @@ def test_all_selectors_n_1_returns_single_index():
                       ("GQD", GreedyQualityDiversity),
                       ("FL", FacilityLocation),
                       ("DPP", DPPSelector),
-                      ("NBV", NextBestView)]:
+                      ("NBV", NextBestView),
+                      ("KMeansXNN", TopKMeansXNN)]:
         idx = cls().select(emb, q, 1)
         check(len(idx) == 1, f"{name} n=1: got {len(idx)} indices, expected 1")
 
