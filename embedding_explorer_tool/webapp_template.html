@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Embedding Explorer — Top kMeans in xNN Quality Neighborhood</title>
+<script src="/static/plotly.min.js"></script>
+<style>
+  html, body { margin: 0; height: 100%; font-family: "Segoe UI", Arial, sans-serif;
+               background: #111318; color: #e6e6e6; }
+  #topbar { display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+            padding: 8px 14px; background: #1b1d26; border-bottom: 1px solid #333744; }
+  #topbar .title { font-weight: 600; font-size: 14px; margin-right: 6px; }
+  #topbar label { font-size: 12px; color: #aab; }
+  #topbar input, #topbar select {
+    background: #232633; color: #eee; border: 1px solid #3a3f55; border-radius: 4px;
+    padding: 4px 6px; font-size: 13px; width: 74px; }
+  #topbar select { width: 130px; }
+  #topbar button {
+    background: #3b5bdb; color: #fff; border: none; border-radius: 4px;
+    padding: 5px 14px; font-size: 13px; cursor: pointer; }
+  #topbar button:hover { background: #4c6ef5; }
+  #topbar .spacer { flex: 1; }
+  #main { display: flex; height: calc(100vh - 49px); }
+  #left { flex: 1; min-width: 0; position: relative; }
+  #plot3d { position: absolute; inset: 0; }
+  #right { width: 38%; min-width: 360px; display: flex; flex-direction: column;
+           border-left: 1px solid #333744; background: #15171e; }
+  #frameview { flex: 1; min-height: 0; width: 100%; object-fit: contain; background: #000; }
+  #textout { height: 38%; min-height: 120px; overflow: auto; margin: 0;
+             background: #0d0f14; border-top: 1px solid #333744; padding: 8px 10px;
+             font-family: "Consolas", "Menlo", monospace; font-size: 12px; line-height: 1.45;
+             white-space: pre; }
+</style>
+</head>
+<body>
+  <div id="topbar">
+    <span class="title">Embedding Explorer</span>
+    <label>k (clusters) <input id="k_input" type="number" min="1" value="8"></label>
+    <label>init
+      <select id="init_select">
+        <option value="farthest" selected>farthest</option>
+        <option value="best_quality">best_quality</option>
+      </select>
+    </label>
+    <label>xNN k <input id="x_input" type="number" min="1" value="3"></label>
+    <button id="run_btn">Run</button>
+    <span class="spacer"></span>
+    <label>Frame ID <input id="frameid_input" type="number" value="0"></label>
+    <button id="show_btn">Show Frame</button>
+  </div>
+  <div id="main">
+    <div id="left"><div id="plot3d"></div></div>
+    <div id="right">
+      <img id="frameview" alt="frame">
+      <pre id="textout">Loading&#8230;</pre>
+    </div>
+  </div>
+<script>
+"use strict";
+
+const plotDiv = document.getElementById("plot3d");
+const textOut = document.getElementById("textout");
+const frameView = document.getElementById("frameview");
+
+async function run() {
+  const k = parseInt(document.getElementById("k_input").value, 10) || 8;
+  const init = document.getElementById("init_select").value;
+  const x = parseInt(document.getElementById("x_input").value, 10) || 3;
+  textOut.textContent = "Running k-means (k=" + k + ", init=" + init + ", xNN=" + x + ")…";
+  let data;
+  try {
+    const resp = await fetch("/api/run?k=" + k + "&init=" + init + "&x=" + x);
+    if (!resp.ok) throw new Error("HTTP " + resp.status);
+    data = await resp.json();
+  } catch (err) {
+    textOut.textContent = "Error: " + err.message;
+    return;
+  }
+  Plotly.react(plotDiv, data.figure.data, data.figure.layout, { responsive: true });
+  textOut.textContent = data.text;
+  if (data.picks && data.picks.length && !frameView.getAttribute("src")) {
+    showFrame(data.picks[0]);
+  }
+}
+
+function showFrame(id) {
+  if (id === undefined || id === null || id === "") {
+    id = parseInt(document.getElementById("frameid_input").value, 10);
+  } else {
+    document.getElementById("frameid_input").value = id;
+  }
+  if (Number.isNaN(id)) return;
+  frameView.setAttribute("src", "/composite/" + id + ".png");
+}
+
+plotDiv.on("plotly_hover", function (ev) {
+  if (!ev.points || !ev.points.length) return;
+  const pt = ev.points[0];
+  const id = pt.customdata ? pt.customdata[0] : null;
+  if (id !== null && id !== undefined) showFrame(id);
+});
+
+document.getElementById("run_btn").addEventListener("click", run);
+document.getElementById("show_btn").addEventListener("click", function () { showFrame(); });
+document.getElementById("frameid_input").addEventListener("keydown", function (e) {
+  if (e.key === "Enter") showFrame();
+});
+
+run();
+</script>
+</body>
+</html>

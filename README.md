@@ -124,6 +124,20 @@ python -m plotting_process.wrapper --input_dir ./outputs [--output_dir ./plots] 
 
 If `--output_dir` is omitted, the `plots/` folder is created inside `--input_dir`. The selected-sample folders are produced by the pipeline itself (`run.py`), not by the standalone plotter.
 
+### Embedding Explorer
+
+Interactive 3D visualisation of the kMeans + constrained-xNN selection *before* top-k selection — the embedding pool, cluster colours, quality-linked dot alpha, centroid stars, xNN candidates and final picks, with a live frame viewer (mask overlay):
+
+```bash
+# Web app (single browser window, offline-capable plotly)
+python -m embedding_explorer_tool.webapp --output_dir ./outputs
+
+# tkinter + matplotlib desktop mirror
+python -m embedding_explorer_tool.gui_tk --output_dir ./outputs
+```
+
+See [`docs/explorer.md`](docs/explorer.md) for layout, marker legend and controls.
+
 ### Arguments
 
 | Argument | Default | Choices |
@@ -344,10 +358,19 @@ object_view_selection/
 │   ├── correctness_test_units/  # Test modules (273 checks)
 │   └── smoke_test_units/        # Smoke test modules (51 checks)
 │
+├── embedding_explorer_tool/  # Interactive kMeans + xNN explorer
+│   ├── algorithms.py         # Snapshot loading, seeds, k-means, xNN, MDS, overlay, text
+│   ├── webapp_plotting.py    # Plotly 3D figure builder
+│   ├── webapp.py             # Local HTTP server (/api/run, /composite/, ...)
+│   ├── webapp_template.html  # Single-page frontend
+│   ├── gui_tk.py             # tkinter + matplotlib mirror
+│   └── static/plotly.min.js  # Vendored plotly bundle (offline)
+│
 ├── docs/
 │   ├── pipeline.md              # Detailed pipeline documentation
 │   ├── plotting.md              # Plotting module reference
 │   ├── selection_algorithms.md  # Selection algorithm deep-dive
+│   ├── explorer.md              # Embedding explorer tool reference
 │   └── thresholds.md            # Threshold auto-tuning reference
 │
 └── README.md
@@ -359,3 +382,4 @@ object_view_selection/
 - [`docs/thresholds.md`](docs/thresholds.md) — Auto-tuning strategy, safety limits, percentile rules, override instructions
 - [`docs/plotting.md`](docs/plotting.md) — Diagnostic plot reference, output structure, standalone usage
 - [`docs/selection_algorithms.md`](docs/selection_algorithms.md) — Selection algorithm deep-dive with pseudocode and comparison
+- [`docs/explorer.md`](docs/explorer.md) — Embedding explorer tool reference (web app + tkinter)
