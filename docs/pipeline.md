@@ -406,12 +406,18 @@ outputs/
 │       ├── mask/           #   selected object masks
 │       ├── depth/          #   only when <data_root>/depth exists
 │       └── hand_mask/      #   only when a hand mask is available
-└── rejected_samples/       # Rejected tuples, same layout as selected_samples/
-    └── <obj_id>/
-        ├── rgb/
-        ├── mask/
-        ├── depth/
-        └── hand_mask/
+├── accepted_samples/       # Accepted-but-unselected tuples (--debug), same layout
+│   └── <obj_id>/
+│       ├── rgb/
+│       ├── mask/
+│       └── hand_mask/
+└── rejected_samples/       # Rejected tuples grouped by rejection reason:
+    └── <reason>/           #   e.g. blur, incomplete_shape, occlusion,
+        └── <obj_id>/       #   small_object, vincent_border_pixel, and the
+            ├── rgb/        #   variant reasons <reason>_threshold / <reason>_outlier
+            ├── mask/       #   (task_plans/task4.md)
+            ├── depth/
+            └── hand_mask/
 ```
 
 ### report.json includes:

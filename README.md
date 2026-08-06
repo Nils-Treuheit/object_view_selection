@@ -187,12 +187,19 @@ outputs/
 │       ├── depth/         #   frame-wise depth (only when <data_root>/depth exists)
 │       └── hand_mask/     #   hand masks (only when a hand mask is available)
 │
-├── rejected_samples/      # Rejected tuples, same layout as selected_samples/
+├── accepted_samples/      # Accepted-but-unselected tuples (--debug), same layout
 │   └── <obj_id>/
 │       ├── rgb/
 │       ├── mask/
-│       ├── depth/         #   only when <data_root>/depth exists
-│       └── hand_mask/     #   only when a hand mask is available
+│       └── hand_mask/
+│
+├── rejected_samples/      # Rejected tuples grouped by rejection reason:
+│   └── <reason>/          #   e.g. blur, incomplete_shape, occlusion,
+│       └── <obj_id>/      #   small_object, vincent_border_pixel, plus the
+│           ├── rgb/       #   variant reasons <reason>_threshold / _outlier
+│           ├── mask/
+│           ├── depth/     #   only when <data_root>/depth exists
+│           └── hand_mask/ #   only when a hand mask is available
 │
 ├── bad_examples/          # Per-stage example frames (if --plot)
 │   ├── pre-filter_stage/  # <feature>_filtered.png (reason-matched) or

@@ -619,12 +619,19 @@ outputs/
 │       ├── depth/           # only when <data_root>/depth exists
 │       └── hand_mask/       # only when a hand mask is available
 │
-├── rejected_samples/        # same layout as selected_samples/
+├── accepted_samples/        # accepted-but-unselected tuples (--debug), same layout
 │   └── <obj_id>/
 │       ├── rgb/
 │       ├── mask/
-│       ├── depth/
 │       └── hand_mask/
+│
+├── rejected_samples/        # grouped by rejection reason:
+│   └── <reason>/            #   e.g. blur, incomplete_shape, occlusion,
+│       └── <obj_id>/        #   small_object, vincent_border_pixel, plus the
+│           ├── rgb/         #   variant reasons <reason>_threshold / _outlier
+│           ├── mask/
+│           ├── depth/
+│           └── hand_mask/
 │
 ├── report.json
 │
