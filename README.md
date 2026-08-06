@@ -250,7 +250,7 @@ outputs/
             ├── selected_neighbors_knn.png      # 5-NN of each selected view (embedding)
             ├── selected_neighbors_kmeans.png   # 5 neighbours from the selected view's k-means cluster
             ├── selected_clusters_pca.png       # PCA scatter coloured by k-means cluster
-            └── embedded_samples/samples_<NN>.png  # original, mask, 224×224 input on contrast bg, input+mask
+            └── embedded_samples/samples_<NN>.png  # original, mask, 224×224 cut-out on contrast bg, + original mask
 ```
 
 ## Configuration
@@ -341,7 +341,7 @@ object_view_selection/
 │   └── vincent.py            # VincentsArea/Artifacts/MotionBlurQuality (pass-through)
 │
 ├── embeddings/
-│   ├── base.py               # Abstract EmbeddingModel
+│   ├── base.py               # Abstract EmbeddingModel (+ optional RGBA alpha flag)
 │   ├── crop.py               # Bbox/masked/square crops + contrast background input
 │   ├── dinov3.py             # DINOv3 (ViT)
 │   ├── dinov2.py             # DINOv2 (ViT)

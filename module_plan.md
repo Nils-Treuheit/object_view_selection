@@ -384,8 +384,9 @@ Supports
 - square crop
 - resized crop
 - mask growth (dilation)
-- dataset-wide maximum-contrast background (`compute_contrast_background`: bright border set → black, dark border set → white)
-- contrast composite input (`contrast_input`: grown-mask crop on the static background)
+- dataset-wide maximum-contrast background (`compute_contrast_background`: sampled from the original mask's border pixels; bright border set → black, dark border set → white)
+- contrast cut-out input (`contrast_input`: image × grown mask placed on the static background; `contrast_mask` gives the original mask aligned to that input)
+- optional RGBA alpha channel for RGBA-capable encoders (`accepts_rgba`): `1.0` original mask, `0.8` cut-out margin, `0.66` static background
 
 ---
 

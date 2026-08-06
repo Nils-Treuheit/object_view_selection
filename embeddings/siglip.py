@@ -24,7 +24,7 @@ class SigLIPEmbedding(EmbeddingModel):
         return self._dim
 
     def encode(self, image: np.ndarray, mask: np.ndarray) -> np.ndarray:
-        crop = contrast_input(image, mask, self.background, size=224)
+        crop = contrast_input(image, mask, self.background, size=224, rgba=self.accepts_rgba)
         inputs = self.processor(images=crop, return_tensors="pt").to(self.device)
 
         with torch.no_grad():

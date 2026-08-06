@@ -89,6 +89,16 @@ def _square_object(brightness):
     return img, mask
 
 
+def _wide_object(obj_color, local_bg):
+    """Wide-centred object; grown bbox is 30x70 so padding is vertical."""
+    h = w = 100
+    img = np.full((h, w, 3), local_bg, dtype=np.uint8)
+    mask = np.zeros((h, w), dtype=np.uint8)
+    mask[40:60, 20:80] = 255
+    img[40:60, 20:80] = obj_color
+    return img, mask
+
+
 def test_contrast_background_bright_border_is_black():
     from embeddings.crop import compute_contrast_background
 
@@ -128,34 +138,52 @@ def test_contrast_background_aggregates_over_set():
 def test_contrast_input_black_background():
     from embeddings.crop import contrast_input
 
-    img, mask = _square_object(240)
+    img, mask = _wide_object(obj_color=240, local_bg=128)
     out = contrast_input(img, mask, background=0)
 
     check(out.shape == (224, 224, 3), f"Contrast input 224x224 = {out.shape}")
-    check(out[0, 0].tolist() == [0, 0, 0], "Background outside grown mask is black")
+    check(out[0, 0].tolist() == [0, 0, 0], f"Padding is black bg, got {out[0, 0]}")
     check(out[112, 112].mean() > 200, f"Object preserved at centre, mean={out[112, 112].mean():.1f}")
+    check(out[70, 112].mean() > 100, f"Grown margin keeps image content, mean={out[70, 112].mean():.1f}")
 
 
 def test_contrast_input_white_background():
     from embeddings.crop import contrast_input
 
-    img, mask = _square_object(30)
+    img, mask = _wide_object(obj_color=30, local_bg=200)
     out = contrast_input(img, mask, background=255)
 
-    check(out[0, 0].tolist() == [255, 255, 255], "Background outside grown mask is white")
+    check(out[0, 0].tolist() == [255, 255, 255], f"Padding is white bg, got {out[0, 0]}")
     check(out[112, 112].mean() < 80, f"Object preserved at centre, mean={out[112, 112].mean():.1f}")
+    check(out[70, 112].mean() > 150, f"Grown margin keeps image content, mean={out[70, 112].mean():.1f}")
 
 
 def test_contrast_input_grows_mask():
     from embeddings.crop import contrast_input
 
     img, mask = _square_object(240)
-    g0 = contrast_input(img, mask, background=0, grow=0)
-    g5 = contrast_input(img, mask, background=0, grow=5)
+    g0 = contrast_input(img, mask, background=255, grow=0)
+    g5 = contrast_input(img, mask, background=255, grow=5)
 
-    check(g0[0, :].mean() > 200, "grow=0: object touches top edge (no margin)")
-    check(g5[0, :].mean() < 20, f"grow=5: background margin at top edge, mean={g5[0, :].mean():.1f}")
+    check(g0[0, :].mean() > 200, "grow=0: object fills crop, no margin")
+    check(g5[0, :].mean() < 20, f"grow=5: margin is original image content, not bg, mean={g5[0, :].mean():.1f}")
     check(g5[112, 112].mean() > 200, "Object still present at centre")
+
+
+def test_contrast_mask_aligns_original_mask():
+    from embeddings.crop import contrast_input, contrast_mask
+
+    img, mask = _wide_object(obj_color=240, local_bg=0)
+    out = contrast_input(img, mask, background=255, grow=5, size=224)
+    cm = contrast_mask(mask, grow=5, size=224)
+
+    check(cm.shape == (224, 224), f"Contrast mask 224x224 = {cm.shape}")
+    check(cm[0, 0] == 0, "Top padding is outside the original mask")
+    check(cm[112, 112] == 255, "Object centre is inside the original mask")
+    frac = (cm == 255).mean()
+    check(0.18 < frac < 0.32, f"Original-mask fraction ~0.24, got {frac:.3f}")
+    under = out[cm == 255]
+    check(under.mean() > 200, f"Input under the original mask is object content, mean={under.mean():.1f}")
 
 
 def test_contrast_input_none_falls_back_to_legacy():
@@ -165,6 +193,43 @@ def test_contrast_input_none_falls_back_to_legacy():
     out = contrast_input(img, mask, background=None)
     legacy = padded_square_crop(img, mask)
     check(np.array_equal(out, legacy), "background=None -> legacy padded_square_crop")
+
+
+def test_contrast_input_rgba_alpha_values():
+    from embeddings.crop import contrast_input
+
+    img, mask = _wide_object(obj_color=240, local_bg=128)
+    rgb = contrast_input(img, mask, background=0, rgba=False)
+    out = contrast_input(img, mask, background=0, rgba=True)
+
+    check(out.shape == (224, 224, 4), f"RGBA input 224x224x4 = {out.shape}")
+    check(np.array_equal(out[..., :3], rgb), "RGBA RGB channels match the RGB output")
+    check(abs(int(out[112, 112, 3]) - 255) <= 3, f"Mask alpha ~1.0, got {out[112, 112, 3]}")
+    check(abs(int(out[70, 112, 3]) - round(0.8 * 255)) <= 3, f"Margin alpha ~0.8, got {out[70, 112, 3]}")
+    check(abs(int(out[0, 0, 3]) - round(0.66 * 255)) <= 3, f"Background alpha ~0.66, got {out[0, 0, 3]}")
+
+
+def test_contrast_input_rgba_white_background():
+    from embeddings.crop import contrast_input
+
+    img, mask = _wide_object(obj_color=30, local_bg=200)
+    out = contrast_input(img, mask, background=255, rgba=True)
+
+    check(out.shape == (224, 224, 4), f"RGBA shape = {out.shape}")
+    check(abs(int(out[112, 112, 3]) - 255) <= 3, f"Mask alpha ~1.0, got {out[112, 112, 3]}")
+    check(abs(int(out[0, 0, 3]) - round(0.66 * 255)) <= 3, f"Background alpha ~0.66, got {out[0, 0, 3]}")
+    check(out[0, 0].tolist()[:3] == [255, 255, 255], "RGB unchanged (white bg)")
+
+
+def test_contrast_input_rgba_empty_mask():
+    from embeddings.crop import contrast_input
+
+    img = np.zeros((100, 100, 3), dtype=np.uint8)
+    mask = np.zeros((100, 100), dtype=np.uint8)
+    out = contrast_input(img, mask, background=255, rgba=True)
+
+    check(out.shape == (224, 224, 4), f"RGBA empty-mask shape = {out.shape}")
+    check(out[..., 3].mean() == round(0.66 * 255), "All-background alpha when mask empty")
 
 
 CROP_TESTS = [
@@ -178,5 +243,9 @@ CROP_TESTS = [
     ("Contrast input black bg", test_contrast_input_black_background),
     ("Contrast input white bg", test_contrast_input_white_background),
     ("Contrast input grows mask", test_contrast_input_grows_mask),
+    ("Contrast mask aligns original mask", test_contrast_mask_aligns_original_mask),
     ("Contrast input legacy fallback", test_contrast_input_none_falls_back_to_legacy),
+    ("Contrast input RGBA alpha values", test_contrast_input_rgba_alpha_values),
+    ("Contrast input RGBA white bg", test_contrast_input_rgba_white_background),
+    ("Contrast input RGBA empty mask", test_contrast_input_rgba_empty_mask),
 ]

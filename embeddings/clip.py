@@ -27,7 +27,7 @@ class CLIPEmbedding(EmbeddingModel):
         return self._dim
 
     def encode(self, image: np.ndarray, mask: np.ndarray) -> np.ndarray:
-        crop = contrast_input(image, mask, self.background, size=224)
+        crop = contrast_input(image, mask, self.background, size=224, rgba=self.accepts_rgba)
         from PIL import Image
         pil = Image.fromarray(crop)
         tensor = self.preprocess(pil).unsqueeze(0).to(self.device)

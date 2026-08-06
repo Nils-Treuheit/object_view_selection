@@ -3,12 +3,14 @@ Debug plots comparing the original frames against the embedding model's input.
 
 Each figure is a 4x4 image matrix: one row per randomly sampled observation,
 with the original frame, the original + mask overlay, the embedding model's
-actual 224x224 input (``contrast_input``: grown-mask crop of the object on the
-static maximum-contrast background) and that input + its grown mask.
+actual 224x224 input (``contrast_input``: grown-mask cut-out of the object on
+the static maximum-contrast background) and that input with the original (not
+grown) mask overlaid.
 
 The static background (black for bright-border objects, white for dark-border
-objects) is computed over the whole pool with ``compute_contrast_background``;
-pass ``background`` to reuse the value the embedding model was set to.
+objects) is decided once over the whole pool with
+``compute_contrast_background``; pass ``background`` to reuse the value the
+embedding model was set to.
 
 Output lands in ``<output_dir>/embedded_samples/samples_<n>.png`` (a sibling
 of ``plots/`` and ``bad_examples/``).
@@ -23,7 +25,7 @@ from matplotlib import pyplot as plt
 from embeddings.crop import (
     compute_contrast_background,
     contrast_input,
-    grow_mask,
+    contrast_mask,
 )
 
 GROW_PX = 5
@@ -53,23 +55,6 @@ def _mask_overlay(image, mask, color=(0, 255, 0), alpha=0.5):
             (1 - alpha) * overlay[foreground] + alpha * np.array(color)
         ).astype(np.float32)
     return np.clip(overlay, 0, 255).astype(np.uint8)
-
-
-def _square_mask(mask, size=224):
-    """Mirror of ``contrast_input`` applied to the mask itself."""
-    mask = np.asarray(mask) > 0
-    ys, xs = np.where(mask)
-    if len(ys) == 0:
-        return np.zeros((size, size), dtype=np.uint8)
-    y1, y2 = int(ys.min()), int(ys.max()) + 1
-    x1, x2 = int(xs.min()), int(xs.max()) + 1
-    crop = mask[y1:y2, x1:x2].astype(np.uint8) * 255
-    h, w = crop.shape[:2]
-    s = max(h, w)
-    square = np.zeros((s, s), dtype=np.uint8)
-    square[(s - h) // 2:(s - h) // 2 + h, (s - w) // 2:(s - w) // 2 + w] = crop
-    from PIL import Image
-    return np.array(Image.fromarray(square).resize((size, size), Image.LANCZOS))
 
 
 def plot_embedded_samples(pool_obs, output_dir, n_figures=3, n_examples=4, random_state=0,
@@ -115,14 +100,13 @@ def plot_embedded_samples(pool_obs, output_dir, n_figures=3, n_examples=4, rando
                 continue
 
             model_input = contrast_input(image, mask, background, grow=GROW_PX, size=224)
-            grown = grow_mask(mask, grow=GROW_PX) if mask is not None else None
-            square_m = _square_mask(grown, size=224) if mask is not None else None
+            square_m = contrast_mask(mask, grow=GROW_PX, size=224) if mask is not None else None
 
             cells = [
                 (image, None, "original"),
                 (image, mask, "original + mask"),
                 (model_input, None, "embedding input 224x224"),
-                (model_input, square_m, "input + mask"),
+                (model_input, square_m, "input + original mask"),
             ]
             for c, (img, m, label) in enumerate(cells):
                 ax = axes[r, c]
