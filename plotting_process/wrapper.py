@@ -9,10 +9,54 @@ warnings.filterwarnings("ignore", message="The TBB threading layer")
 warnings.filterwarnings("ignore", message="The behavior of DataFrame concatenation")
 
 from .embedding_plots import run_all as run_embedding_plots
+from .embedding_plots import run_criteria_dr
+from .embedding_plots.base import kmeans_cluster_labels
 from .feature_plots import plot_bad_examples, plot_dataset_overview
 from .misc_plot import plot_rejection_reasons
 from .pre_filter_plots import plot_pre_filter_distributions
 from .quality_score_plots.violins import plot_quality_violins
+
+_DEFAULT_CLUSTERS = 10
+
+_CRITERIA_COLUMNS = [
+    "laplacian", "tenengrad",
+    "area_ratio", "border_ratio", "edge_ratio",
+    "hand_overlap",
+    "vincent_area_fraction", "vincent_artifact_fraction",
+    "vincent_boundary_blur_variance",
+    "solidity", "extent", "convexity", "completeness",
+    "blur", "area", "occlusion", "confidence",
+]
+
+
+def _criteria_matrix(pool_obs):
+    """Normalised [0, 1] metric matrix of the selection pool.
+
+    Only criteria present on every observation are kept, so it degrades
+    gracefully in standalone mode and with partial metric dicts. Each column
+    is min-max scaled so no single criterion dominates the DR distances.
+    """
+    rows = []
+    for obs in pool_obs:
+        m = getattr(obs, "metrics", None)
+        row = {}
+        if m is not None:
+            for col in _CRITERIA_COLUMNS:
+                v = getattr(m, col, None)
+                if v is not None:
+                    row[col] = float(v)
+        rows.append(row)
+    if not rows:
+        return None
+    cols = [c for c in _CRITERIA_COLUMNS if all(c in r for r in rows)]
+    if not cols:
+        return None
+    mat = np.array([[r[c] for c in cols] for r in rows], dtype=float)
+    lo = mat.min(axis=0)
+    hi = mat.max(axis=0)
+    span = hi - lo
+    span[span < 1e-12] = 1.0
+    return (mat - lo) / span
 
 
 def _indexed_files(dirpath, suffix=".png"):
@@ -111,12 +155,14 @@ def _load_from_disk(input_dir):
 
 def _ensure_dirs(base):
     pre = base / "pre-filter"
-    sel_2d = base / "selection" / "2D_DR_plots"
-    sel_3d = base / "selection" / "3D_DR_plots"
-    pre.mkdir(parents=True, exist_ok=True)
-    sel_2d.mkdir(parents=True, exist_ok=True)
-    sel_3d.mkdir(parents=True, exist_ok=True)
-    return pre, sel_2d, sel_3d
+    sel = base / "selection"
+    emb_2d = sel / "embedding_space" / "2D_DR_plots"
+    emb_3d = sel / "embedding_space" / "3D_DR_plots"
+    crit_2d = sel / "quality_criteria" / "DR_plots" / "2D_DR_plots"
+    crit_3d = sel / "quality_criteria" / "DR_plots" / "3D_DR_plots"
+    for d in (pre, emb_2d, emb_3d, crit_2d, crit_3d):
+        d.mkdir(parents=True, exist_ok=True)
+    return pre, emb_2d, emb_3d, crit_2d, crit_3d
 
 
 def plot_all(
@@ -124,7 +170,7 @@ def plot_all(
     embeddings=None, selected_idx=None, quality_scores=None,
     output_dir=None, input_dir=None,
     debug=False, single_set_plots=False,
-    pool_obs=None,
+    pool_obs=None, n_clusters=_DEFAULT_CLUSTERS,
 ):
     """
     Main plotting entry point.
@@ -150,7 +196,7 @@ def plot_all(
         pool_obs = accepted
 
     plots_root = output_dir / "plots"
-    dir_pre, dir_sel_2d, dir_sel_3d = _ensure_dirs(plots_root)
+    dir_pre, dir_emb_2d, dir_emb_3d, dir_crit_2d, dir_crit_3d = _ensure_dirs(plots_root)
 
     print("Generating pipeline plots...")
 
@@ -166,11 +212,24 @@ def plot_all(
     plot_bad_examples(accepted, rejected, selected, output_dir)
 
     if embeddings is not None and len(embeddings) >= 2:
+        cluster_labels = kmeans_cluster_labels(embeddings, n_clusters)
         run_embedding_plots(
             embeddings, selected_idx, quality_scores,
-            dir_sel_2d, dir_sel_3d,
-            debug=debug,
+            dir_emb_2d, dir_emb_3d,
+            debug=debug, cluster_labels=cluster_labels,
         )
+
+        criteria = _criteria_matrix(pool_obs)
+        if criteria is not None and len(criteria) == len(embeddings):
+            run_criteria_dr(
+                criteria, selected_idx, quality_scores,
+                dir_crit_2d, dir_crit_3d,
+                debug=debug, n_clusters=n_clusters,
+            )
+
+    if debug and pool_obs:
+        from .embedded_samples_plots import plot_embedded_samples
+        plot_embedded_samples(pool_obs, output_dir)
 
     if debug and embeddings is not None and len(embeddings) >= 2 and len(selected_idx) > 0:
         from .neighbor_plots import plot_neighbor_analysis
@@ -189,6 +248,8 @@ def main():
     parser.add_argument("--input_dir", required=True, help="Pipeline results directory")
     parser.add_argument("--output_dir", default=None, help="Where to create plots/ (default: input_dir)")
     parser.add_argument("--debug", action="store_true", help="Show all DR methods (not just PCA+MDS)")
+    parser.add_argument("--n_clusters", type=int, default=_DEFAULT_CLUSTERS,
+                        help="k-means clusters used for LDA labels and cluster-coloured plots")
     args = parser.parse_args()
 
     plot_all(
@@ -196,6 +257,7 @@ def main():
         output_dir=args.output_dir,
         debug=args.debug,
         single_set_plots=True,
+        n_clusters=args.n_clusters,
     )
 
 

@@ -232,53 +232,141 @@ def draw_embedding_scatter_3d(path, coords, quality_scores, selected_idx, title,
     plt.close("all")
 
 
+def draw_cluster_scatter_2d(path, coords, cluster_labels, selected_idx, title, var_ratio=None):
+    """2D scatter coloured by discrete cluster labels, selected marked as stars."""
+    n = len(coords)
+    labels = np.asarray(cluster_labels)
+    k = len(np.unique(labels))
+    cmap = plt.get_cmap("tab20", max(k, 1))
+
+    fig, ax = plt.subplots(figsize=(10, 8))
+    scatter = ax.scatter(
+        coords[:, 0], coords[:, 1], c=labels, cmap=cmap, s=25, alpha=0.7,
+        vmin=-0.5, vmax=max(k, 1) - 0.5,
+    )
+
+    sel = list(selected_idx)
+    sel_coords = coords[sel]
+    ax.scatter(
+        sel_coords[:, 0], sel_coords[:, 1], marker="*", s=260,
+        c="gold", edgecolors="black", linewidths=1.2, zorder=5,
+        label="selected",
+    )
+    for i, pos in enumerate(sel):
+        ax.annotate(str(i + 1), coords[pos], xytext=(6, 6),
+                    textcoords="offset points", fontsize=8,
+                    fontweight="bold", color="black")
+
+    if var_ratio is not None and len(var_ratio) >= 2:
+        ax.set_xlabel(f"Component 1 ({var_ratio[0]:.1%} variance)")
+        ax.set_ylabel(f"Component 2 ({var_ratio[1]:.1%} variance)")
+    else:
+        ax.set_xlabel("Component 1")
+        ax.set_ylabel("Component 2")
+
+    ax.set_title(title)
+    ax.legend(loc="best")
+
+    cbar = fig.colorbar(scatter, ax=ax, ticks=np.arange(k))
+    cbar.ax.set_yticklabels([str(i) for i in range(k)])
+    cbar.set_label("k-means cluster")
+
+    fig.tight_layout()
+    fig.savefig(path, dpi=150)
+    plt.close(fig)
+    print(f"  Saved {path}")
+
+
+def draw_cluster_scatter_3d(path, coords, cluster_labels, selected_idx, title, var_ratio=None):
+    """3D scatter coloured by discrete cluster labels (plotly)."""
+    import plotly.graph_objects as go
+    import matplotlib
+
+    labels = np.asarray(cluster_labels)
+    k = len(np.unique(labels))
+    cmap = matplotlib.colormaps["tab20"].resampled(max(k, 1))
+    colors = [matplotlib.colors.to_hex(cmap(labels[i])) for i in range(len(labels))]
+
+    sel = list(selected_idx)
+    selected_set = set(sel)
+    non_sel = [i for i in range(len(coords)) if i not in selected_set]
+
+    fig = go.Figure()
+
+    fig.add_trace(go.Scatter3d(
+        x=coords[non_sel, 0], y=coords[non_sel, 1], z=coords[non_sel, 2],
+        mode="markers",
+        marker=dict(
+            size=4, color=[colors[i] for i in non_sel],
+            opacity=0.6,
+        ),
+        text=[f"idx={i}<br>cluster={labels[i]}" for i in non_sel],
+        hoverinfo="text",
+        name="non-selected",
+    ))
+
+    fig.add_trace(go.Scatter3d(
+        x=coords[sel, 0], y=coords[sel, 1], z=coords[sel, 2],
+        mode="markers+text",
+        marker=dict(
+            size=10, color="gold",
+            line=dict(color="black", width=2),
+            opacity=1,
+        ),
+        text=[str(i + 1) for i in range(len(sel))],
+        textposition="top center",
+        textfont=dict(size=12, color="black", family="Arial Black"),
+        hovertext=[f"selected #{i+1}<br>cluster={labels[s]}" for i, s in enumerate(sel)],
+        hoverinfo="text",
+        name="selected",
+    ))
+
+    if var_ratio is not None and len(var_ratio) >= 3:
+        ax_labels = [
+            f"Component 1 ({var_ratio[0]:.1%})",
+            f"Component 2 ({var_ratio[1]:.1%})",
+            f"Component 3 ({var_ratio[2]:.1%})",
+        ]
+    else:
+        ax_labels = ["Component 1", "Component 2", "Component 3"]
+
+    def _axis(t):
+        return dict(title=t, showgrid=True, gridcolor="lightgray", zeroline=False)
+
+    fig.update_layout(
+        title=title,
+        scene=dict(
+            xaxis=_axis(ax_labels[0]),
+            yaxis=_axis(ax_labels[1]),
+            zaxis=_axis(ax_labels[2]),
+            aspectmode="cube",
+        ),
+        width=900, height=800,
+        legend=dict(x=0.8, y=1),
+        margin=dict(l=0, r=0, b=0, t=50),
+    )
+
+    fig.write_html(path)
+    print(f"  Saved {path}")
+    plt.close("all")
+
+
 def render_embedding(
     method_key, method_label, has_original,
-    embeddings, selected_idx, quality_scores,
+    data, selected_idx, quality_scores,
     output_dir_2d, output_dir_3d,
+    cluster_labels=None,
+    stem="embedding",
+    space_label="Embedding Space",
 ):
-    n = len(embeddings)
+    n = len(data)
     if n < 2:
         return
 
-    if method_key == "pca":
-        coords_2d, extra = _reduce_embeddings(embeddings, "pca", n_components=2)
-        var_ratio = extra["explained_variance_ratio"]
-
-        if has_original:
-            draw_embedding_scatter_2d(
-                output_dir_2d / "selection_embedding.png",
-                coords_2d, quality_scores, selected_idx,
-                "View Selection — Embedding Space (PCA)",
-                cmap="jet", vmin=0, vmax=1,
-                var_ratio=var_ratio, draw_nearest_lines=True,
-            )
-
-            draw_embedding_scatter_2d(
-                output_dir_2d / "selection_embedding_scaled.png",
-                coords_2d, quality_scores, selected_idx,
-                "View Selection — Embedding Space (PCA, scaled)",
-                cmap="viridis", vmin=None, vmax=None,
-                var_ratio=var_ratio,
-            )
-
-        try:
-            coords_3d, extra_3d = _reduce_embeddings(embeddings, "pca", n_components=3)
-            draw_embedding_scatter_3d(
-                output_dir_3d / "selection_embedding_3d.html",
-                coords_3d, quality_scores, selected_idx,
-                "View Selection — Embedding Space (PCA 3D)",
-                var_ratio=extra_3d["explained_variance_ratio"],
-            )
-        except Exception as e:
-            print(f"  Note: 3D {method_label} skipped ({e})")
-
-        extra = _reduce_embeddings(embeddings, "pca", n_components=2)[1]
-        return coords_2d, extra["explained_variance_ratio"]
-
     try:
         coords_2d, extra = _reduce_embeddings(
-            embeddings, method_key, selected_idx=selected_idx, n_components=2,
+            data, method_key, selected_idx=selected_idx,
+            n_components=2, labels=cluster_labels,
         )
     except Exception as e:
         print(f"  Skipping {method_label}: {e}")
@@ -288,26 +376,72 @@ def render_embedding(
         print(f"  Skipping 2D {method_label}: only {coords_2d.shape[1]} component(s) available")
         return
 
-    stem = f"embedding_{method_key}"
+    var_ratio = extra.get("explained_variance_ratio") if extra else None
+
+    if method_key == "pca" and has_original:
+        draw_embedding_scatter_2d(
+            output_dir_2d / f"selection_{stem}.png",
+            coords_2d, quality_scores, selected_idx,
+            f"View Selection — {space_label} (PCA)",
+            cmap="jet", vmin=0, vmax=1,
+            var_ratio=var_ratio, draw_nearest_lines=True,
+        )
+
+        draw_embedding_scatter_2d(
+            output_dir_2d / f"selection_{stem}_scaled.png",
+            coords_2d, quality_scores, selected_idx,
+            f"View Selection — {space_label} (PCA, scaled)",
+            cmap="viridis", vmin=None, vmax=None,
+            var_ratio=var_ratio,
+        )
+
     draw_embedding_scatter_2d(
-        output_dir_2d / f"{stem}.png",
+        output_dir_2d / f"{stem}_{method_key}.png",
         coords_2d, quality_scores, selected_idx,
-        f"View Selection — Embedding Space ({method_label})",
+        f"View Selection — {space_label} ({method_label})",
         cmap="viridis", vmin=None, vmax=None,
+        var_ratio=var_ratio,
     )
+
+    if cluster_labels is not None:
+        draw_cluster_scatter_2d(
+            output_dir_2d / f"clusters_{stem}_{method_key}.png",
+            coords_2d, cluster_labels, selected_idx,
+            f"Clusters — {space_label} ({method_label})",
+            var_ratio=var_ratio,
+        )
 
     if n > 3:
         try:
-            coords_3d, _ = _reduce_embeddings(
-                embeddings, method_key, selected_idx=selected_idx, n_components=3,
+            coords_3d, extra_3d = _reduce_embeddings(
+                data, method_key, selected_idx=selected_idx,
+                n_components=3, labels=cluster_labels,
             )
             if coords_3d.shape[1] < 3:
                 print(f"  Skipping 3D {method_label}: only {coords_3d.shape[1]} component(s) available")
             else:
+                var_ratio_3d = extra_3d.get("explained_variance_ratio") if extra_3d else None
+                if method_key == "pca" and has_original:
+                    draw_embedding_scatter_3d(
+                        output_dir_3d / f"selection_{stem}_3d.html",
+                        coords_3d, quality_scores, selected_idx,
+                        f"View Selection — {space_label} (PCA 3D)",
+                        var_ratio=var_ratio_3d,
+                    )
                 draw_embedding_scatter_3d(
-                    output_dir_3d / f"{stem}_3d.html",
+                    output_dir_3d / f"{stem}_{method_key}_3d.html",
                     coords_3d, quality_scores, selected_idx,
-                    f"View Selection — Embedding Space ({method_label} 3D)",
+                    f"View Selection — {space_label} ({method_label} 3D)",
+                    var_ratio=var_ratio_3d,
                 )
+                if cluster_labels is not None:
+                    draw_cluster_scatter_3d(
+                        output_dir_3d / f"clusters_{stem}_{method_key}_3d.html",
+                        coords_3d, cluster_labels, selected_idx,
+                        f"Clusters — {space_label} ({method_label} 3D)",
+                        var_ratio=var_ratio_3d,
+                    )
         except Exception as e:
             print(f"  Note: 3D {method_label} skipped ({e})")
+
+    return coords_2d, var_ratio

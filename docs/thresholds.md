@@ -81,6 +81,34 @@ Filters early in the pipeline reject cheaply before more expensive checks. After
 
 ---
 
+## Threshold & Outlier Variants (`preprocessing/variants.py`)
+
+Every pre-filter's `evaluate` returns a `(score, passed, reason)` triple with a 0..1 "goodness" score (higher = better). A uniform wrapper, `FilterVariant`, layers two optional rejection modes on top of any hard filter — and the same logic runs over the soft filters' population weights — without changing the base filter's own behavior:
+
+| Knob | Mode | Behavior | Reject reason |
+|------|------|----------|---------------|
+| `threshold_min` | absolute floor | `score < threshold_min` → reject | `<reason>_threshold` |
+| `outlier_z` | robust bad-outlier | population fit (median/MAD), `z <= -outlier_z` → reject | `<reason>_outlier` |
+
+Both modes key off the same 0..1 score every filter already returns, so they are uniform across hard and soft filters. When the inner filter rejects on its own, its reason is kept verbatim (no variant suffix). The population fit is skipped entirely when `outlier_z` is unset, so default pipeline behavior is unchanged.
+
+### Hard filters (`FilterVariant` via `run.build_filters`)
+
+All hard filter configs carry `threshold_min` and `outlier_z` (both default `None`). Example:
+
+```python
+filters.blur.threshold_min = 5.0    # absolute sharpness floor, reason "blur_threshold"
+filters.area.outlier_z = 3.0        # reject area_ratio z <= -3, reason "area_outlier"
+```
+
+Setting `outlier_z` makes the pipeline flag `requires_fit` and run one population pass (`FilterPipeline.fit_observations`) over all observations before the main loop; the median/MAD robust stats are then used for the z test. This requires the whole pre-filter pass to be two-phase.
+
+### Soft filters (`reject_soft_variants` via `run.py`)
+
+The Vincent soft filters never hard-reject during `evaluate`; they derive a population weight in `(0, 1]`. When `VincentsAreaConfig`, `VincentsArtifactsConfig`, or `VincentsMotionBlurConfig` set `threshold_min` or `outlier_z`, the pipeline moves accepted observations whose weight trips the cutoff into `rejected` right after the soft pass, with annotated reasons (`vincents_area_threshold`, `vincents_artefacts_outlier`, `vincents_motion_blur_threshold`, …) so the per-reason sample folders group them cleanly.
+
+---
+
 ## Overriding
 
 ### Per-run (CLI)

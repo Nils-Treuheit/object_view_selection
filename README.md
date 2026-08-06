@@ -134,7 +134,18 @@ python -m embedding_explorer_tool.webapp --output_dir ./outputs
 
 # tkinter + matplotlib desktop mirror
 python -m embedding_explorer_tool.gui_tk --output_dir ./outputs
+
+# Explore a raw dataset directly: the app generates the snapshot first
+python -m embedding_explorer_tool.webapp \
+    --output_dir ./outputs_embedding_explorer \
+    --data_root /path/to/triprong \
+    --embedding dinov2 --embedding_model dinov2_vitb14_reg
 ```
+
+If `--output_dir` has no snapshot yet, the app runs the same pre-filter +
+quality + embedding stages as `run.py` to generate one from `--data_root`
+before launching. `--embedding`/`--embedding_model` have the same choices and
+default as `run.py` and are ignored once a snapshot already exists.
 
 See [`docs/explorer.md`](docs/explorer.md) for layout, marker legend and controls.
 
@@ -204,21 +215,35 @@ outputs/
         ├── data_set_overview/             # Quality scores, two variants each:
         │   └── quality_score_<feature>_{fixed,relative}.png
         │
-        ├── 2D_DR_plots/
-        │   ├── selection_embedding.png    # PCA (jet)
-        │   ├── selection_embedding_scaled.png  # PCA (viridis)
-        │   ├── embedding_mds.png
-        │   └── embedding_{tsne,umap,...}.png   # (debug only)
+        ├── embedding_space/               # DR of the embedding space
+        │   ├── 2D_DR_plots/
+        │   │   ├── selection_embedding.png        # PCA (jet)
+        │   │   ├── selection_embedding_scaled.png # PCA (viridis)
+        │   │   ├── embedding_mds.png
+        │   │   ├── embedding_{tsne,umap,...}.png  # (debug only)
+        │   │   └── clusters_embedding_<method>.png  # same coords, k-means colour
+        │   └── 3D_DR_plots/
+        │       ├── selection_embedding_3d.html    # PCA (plotly)
+        │       ├── embedding_mds_3d.html
+        │       ├── embedding_{tsne,umap,...}_3d.html  # (debug only)
+        │       └── clusters_embedding_<method>_3d.html
         │
-        ├── 3D_DR_plots/
-        │   ├── selection_embedding_3d.html     # PCA (plotly)
-        │   ├── embedding_mds_3d.html
-        │   └── embedding_{tsne,umap,...}_3d.html  # (debug only)
+        ├── quality_criteria/              # DR of the normalised metric space
+        │   └── DR_plots/
+        │       ├── 2D_DR_plots/
+        │       │   ├── selection_criteria.png / selection_criteria_scaled.png
+        │       │   ├── criteria_{mds,tsne,umap,...}.png  # (debug only)
+        │       │   └── clusters_criteria_<method>.png
+        │       └── 3D_DR_plots/
+        │           ├── selection_criteria_3d.html
+        │           ├── criteria_{mds,tsne,umap,...}_3d.html  # (debug only)
+        │           └── clusters_criteria_<method>_3d.html
         │
         └── debug (--debug only):
             ├── selected_neighbors_knn.png      # 5-NN of each selected view (embedding)
             ├── selected_neighbors_kmeans.png   # 5 neighbours from the selected view's k-means cluster
-            └── selected_clusters_pca.png       # PCA scatter coloured by k-means cluster
+            ├── selected_clusters_pca.png       # PCA scatter coloured by k-means cluster
+            └── embedded_samples/samples_<NN>.png  # original, mask, 224×224 input, input+mask
 ```
 
 ## Configuration
@@ -239,7 +264,7 @@ Their raw stats and weights are exported to `quality.csv` (`vincent_*` / `vincen
 
 ## Testing
 
-The project has **200 correctness test functions** (645 check assertions) and **51 smoke test checks** (including the Vincent hard/soft pre-filters, robust population scoring, and run.py wiring).
+The project has **202 correctness test functions** (742 check assertions) and **51 smoke test checks** (including the Vincent hard/soft pre-filters, robust population scoring, and run.py wiring).
 
 ### Correctness Tests
 
@@ -252,7 +277,7 @@ python test_correctness.py
 # or
 python tests/run_correctness.py
 
-# Expected output: Results: 200 passed, 0 failed out of 200
+# Expected output: Results: 202 passed, 0 failed out of 202
 ```
 
 ### Smoke Tests

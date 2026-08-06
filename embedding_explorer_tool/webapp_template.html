@@ -21,6 +21,12 @@
     padding: 5px 14px; font-size: 13px; cursor: pointer; }
   #topbar button:hover { background: #4c6ef5; }
   #topbar .spacer { flex: 1; }
+  #dims_switch { display: inline-flex; border: 1px solid #3a3f55; border-radius: 4px;
+                 overflow: hidden; }
+  #dims_switch button { border: none; border-radius: 0; padding: 4px 12px;
+                        background: #232633; color: #aab; }
+  #dims_switch button.active { background: #3b5bdb; color: #fff; }
+  #dims_switch button:hover { background: #4c6ef5; color: #fff; }
   #main { display: flex; height: calc(100vh - 49px); }
   #left { flex: 1; min-width: 0; position: relative; }
   #plot3d { position: absolute; inset: 0; }
@@ -45,6 +51,10 @@
     </label>
     <label>xNN k <input id="x_input" type="number" min="1" value="3"></label>
     <button id="run_btn">Run</button>
+    <span id="dims_switch">
+      <button id="dims_2d" class="active">2D</button>
+      <button id="dims_3d">3D</button>
+    </span>
     <span class="spacer"></span>
     <label>Frame ID <input id="frameid_input" type="number" value="0"></label>
     <button id="show_btn">Show Frame</button>
@@ -63,6 +73,7 @@ const plotDiv = document.getElementById("plot3d");
 const textOut = document.getElementById("textout");
 const frameView = document.getElementById("frameview");
 let hoverBound = false;
+let currentDims = "2d";
 
 async function run() {
   const k = parseInt(document.getElementById("k_input").value, 10) || 8;
@@ -71,7 +82,7 @@ async function run() {
   textOut.textContent = "Running k-means (k=" + k + ", init=" + init + ", xNN=" + x + ")…";
   let data;
   try {
-    const resp = await fetch("/api/run?k=" + k + "&init=" + init + "&x=" + x);
+    const resp = await fetch("/api/run?k=" + k + "&init=" + init + "&x=" + x + "&dims=" + currentDims);
     if (!resp.ok) throw new Error("HTTP " + resp.status);
     data = await resp.json();
   } catch (err) {
@@ -116,6 +127,15 @@ document.getElementById("show_btn").addEventListener("click", function () { show
 document.getElementById("frameid_input").addEventListener("keydown", function (e) {
   if (e.key === "Enter") showFrame();
 });
+
+function setDims(dims) {
+  currentDims = dims;
+  document.getElementById("dims_2d").classList.toggle("active", dims === "2d");
+  document.getElementById("dims_3d").classList.toggle("active", dims === "3d");
+  run();
+}
+document.getElementById("dims_2d").addEventListener("click", function () { setDims("2d"); });
+document.getElementById("dims_3d").addEventListener("click", function () { setDims("3d"); });
 
 run();
 </script>

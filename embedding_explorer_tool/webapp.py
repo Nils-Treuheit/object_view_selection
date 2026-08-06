@@ -31,16 +31,37 @@ TOOL_DIR = Path(__file__).parent
 TEMPLATE_PATH = TOOL_DIR / "webapp_template.html"
 PLOTLY_PATH = TOOL_DIR / "static" / "plotly.min.js"
 
-DEFAULT_OUTPUT_DIR = "/tmp/opencode/10_verify_out"
+DEFAULT_OUTPUT_DIR = "outputs_embedding_explorer"
 DEFAULT_DATA_ROOT = "/mnt/HDD1/Project_Code/nit_object_onboarding/workspace/09_triprong_old"
 
 
 class ExplorerState:
-    """Loads the snapshot once and serves computation + images on demand."""
+    """Loads the snapshot once and serves computation + images on demand.
 
-    def __init__(self, output_dir, data_root):
-        snapshot = algorithms.load_snapshot(output_dir)
+    If ``output_dir`` has no snapshot yet, it is generated first (pre-filter +
+    quality scoring + embedding, same as ``run.py``) so the app can point at a
+    fresh ``--data_root`` and still start.
+    """
+
+    def __init__(self, output_dir, data_root, embedding=algorithms.DEFAULT_EMBEDDING,
+                 embedding_model=algorithms.DEFAULT_EMBEDDING_MODEL, auto_thresholds=True):
         self.output_dir = Path(output_dir)
+        if not algorithms.snapshot_exists(self.output_dir):
+            if not data_root:
+                raise FileNotFoundError(
+                    f"No snapshot in {self.output_dir} and no --data_root given to generate one. "
+                    "Pass --data_root (dataset root with images/ and masks/) or point --output_dir "
+                    "at an existing pipeline output."
+                )
+            print(f"No snapshot in {self.output_dir}; generating embeddings first ...")
+            algorithms.generate_snapshot(
+                self.output_dir,
+                data_root,
+                embedding=embedding,
+                embedding_model=embedding_model,
+                auto_thresholds=auto_thresholds,
+            )
+        snapshot = algorithms.load_snapshot(self.output_dir)
         self.embeddings = snapshot["embeddings"]
         self.pool_ids = snapshot["pool_ids"]
         self.quality = snapshot["quality"]
@@ -65,18 +86,21 @@ class ExplorerState:
                 self._mds_coords = algorithms.project_mds(self.embeddings)
             return self._mds_coords
 
-    def api_run(self, k, init, x):
+    def api_run(self, k, init, x, dims="2d"):
         k = int(k)
         x = int(x)
         coords = self.get_coords()
         result = algorithms.run_kmeans_xnn(self.embeddings, self.quality, k, init, x)
-        fig = plotting.build_figure(coords, self.quality, result["labels"], result, self.pool_ids)
+        fig = plotting.build_figure(
+            coords, self.quality, result["labels"], result, self.pool_ids, dims=dims
+        )
         return {
             "figure": json.loads(fig.to_json()),
             "text": algorithms.build_text(result, self.pool_ids, self.quality),
             "k": result["k"],
             "init": result["init"],
             "x": result["x"],
+            "dims": dims,
             "picks": [int(self.pool_ids[i]) for i in result["picks"]],
             "centroid_ids": [int(self.pool_ids[c["medoid"]]) for c in result["clusters"]],
             "xnn": {
@@ -155,7 +179,10 @@ class Handler(BaseHTTPRequestHandler):
         k = params.get("k", ["8"])[0]
         init = params.get("init", ["farthest"])[0]
         x = params.get("x", ["3"])[0]
-        payload = self.state.api_run(k, init, x)
+        dims = params.get("dims", ["2d"])[0]
+        if dims not in ("2d", "3d"):
+            dims = "3d"
+        payload = self.state.api_run(k, init, x, dims)
         body = json.dumps(payload).encode("utf-8")
         return self._send(200, body, "application/json")
 
@@ -200,15 +227,28 @@ def main():
         description="Embedding explorer web app (kMeans + constrained xNN)"
     )
     parser.add_argument("--output_dir", type=str, default=DEFAULT_OUTPUT_DIR,
-                        help="Pipeline output dir with embeddings.npy / quality.csv")
+                        help="Pipeline output dir with embeddings.npy / quality.csv; "
+                             "created and populated from --data_root when it has no snapshot")
     parser.add_argument("--data_root", type=str, default="",
                         help="Dataset root with images/ and masks/ "
                              "(default: from report.json)")
+    parser.add_argument("--embedding", type=str, default=algorithms.DEFAULT_EMBEDDING,
+                        choices=algorithms.EMBEDDING_CHOICES,
+                        help="Embedding type used when generating a fresh snapshot "
+                             "(auto=infer from --embedding_model); unused when a snapshot exists")
+    parser.add_argument("--embedding_model", type=str, default=algorithms.DEFAULT_EMBEDDING_MODEL,
+                        help="Model name or path for embedding generation "
+                             "(auto=infer from --embedding_model); unused when a snapshot exists")
     parser.add_argument("--port", type=int, default=8510)
     parser.add_argument("--no-browser", action="store_true", dest="no_browser")
     args = parser.parse_args()
 
-    state = ExplorerState(args.output_dir, args.data_root)
+    state = ExplorerState(
+        args.output_dir,
+        args.data_root,
+        embedding=args.embedding,
+        embedding_model=args.embedding_model,
+    )
     run_server(state, args.port, open_browser=not args.no_browser)
 
 

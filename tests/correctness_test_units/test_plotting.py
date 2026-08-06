@@ -105,12 +105,18 @@ def test_folder_structure_created():
         check(plots.is_dir(), "plots/ exists")
         check((plots / "pre-filter").is_dir(), "plots/pre-filter/ exists")
         check((plots / "selection").is_dir(), "plots/selection/ exists")
-        check((plots / "selection" / "2D_DR_plots").is_dir(), "plots/selection/2D_DR_plots/ exists")
-        check((plots / "selection" / "3D_DR_plots").is_dir(), "plots/selection/3D_DR_plots/ exists")
+        check((plots / "selection" / "embedding_space" / "2D_DR_plots").is_dir(),
+              "plots/selection/embedding_space/2D_DR_plots/ exists")
+        check((plots / "selection" / "embedding_space" / "3D_DR_plots").is_dir(),
+              "plots/selection/embedding_space/3D_DR_plots/ exists")
+        check((plots / "selection" / "quality_criteria" / "DR_plots" / "2D_DR_plots").is_dir(),
+              "plots/selection/quality_criteria/DR_plots/2D_DR_plots/ exists")
+        check((plots / "selection" / "quality_criteria" / "DR_plots" / "3D_DR_plots").is_dir(),
+              "plots/selection/quality_criteria/DR_plots/3D_DR_plots/ exists")
 
 
-def test_debug_false_only_pca_mds():
-    """Without debug, only PCA (selection_embedding*) and MDS plots appear."""
+def test_debug_false_only_core_methods():
+    """Without debug, only PCA and MDS render; debug-gated methods are absent."""
     from plotting_process.wrapper import plot_all
 
     with tempfile.TemporaryDirectory() as tmp:
@@ -124,19 +130,23 @@ def test_debug_false_only_pca_mds():
             output_dir=out, debug=False, single_set_plots=False,
         )
 
-        d2 = out / "plots" / "selection" / "2D_DR_plots"
+        d2 = out / "plots" / "selection" / "embedding_space" / "2D_DR_plots"
 
         check((d2 / "selection_embedding.png").exists(), "PCA 2D present")
         check((d2 / "selection_embedding_scaled.png").exists(), "PCA scaled present")
+        check((d2 / "embedding_pca.png").exists(), "generic PCA present")
         check((d2 / "embedding_mds.png").exists(), "MDS present")
+        check((d2 / "clusters_embedding_pca.png").exists(), "cluster PCA present")
+        check((d2 / "clusters_embedding_mds.png").exists(), "cluster MDS present")
         check(not (d2 / "embedding_tsne.png").exists(), "t-SNE absent without debug")
         check(not (d2 / "embedding_umap.png").exists(), "UMAP absent without debug")
         check(not (d2 / "embedding_isomap.png").exists(), "Isomap absent without debug")
         check(not (d2 / "embedding_lle.png").exists(), "LLE absent without debug")
+        check(not (d2 / "embedding_lda.png").exists(), "LDA absent without debug")
 
 
 def test_debug_true_all_methods():
-    """With debug, all DR methods produce output files."""
+    """With debug, all DR methods produce output files (incl. LDA via cluster labels)."""
     from plotting_process.wrapper import plot_all
 
     with tempfile.TemporaryDirectory() as tmp:
@@ -150,12 +160,44 @@ def test_debug_true_all_methods():
             output_dir=out, debug=True, single_set_plots=False,
         )
 
-        d2 = out / "plots" / "selection" / "2D_DR_plots"
+        d2 = out / "plots" / "selection" / "embedding_space" / "2D_DR_plots"
 
         for name in ["selection_embedding.png", "selection_embedding_scaled.png",
-                      "embedding_mds.png", "embedding_tsne.png", "embedding_umap.png",
-                      "embedding_isomap.png", "embedding_lle.png"]:
+                      "embedding_pca.png", "embedding_mds.png", "embedding_tsne.png",
+                      "embedding_umap.png", "embedding_isomap.png", "embedding_lle.png",
+                      "embedding_lda.png", "clusters_embedding_pca.png",
+                      "clusters_embedding_mds.png", "clusters_embedding_lda.png"]:
             check((d2 / name).exists(), f"{name} present (debug=True)")
+
+
+def test_debug_true_criteria_dr_plots():
+    """With debug, the quality-criteria DR renders the same method set."""
+    from plotting_process.wrapper import plot_all
+
+    with tempfile.TemporaryDirectory() as tmp:
+        out = Path(tmp)
+        embeddings, qs, sel_idx = _make_synthetic_data(30, 64, 4)
+        accepted, rejected, selected = _make_mock_observations(embeddings, qs, sel_idx)
+
+        plot_all(
+            accepted=accepted, rejected=rejected, selected=selected,
+            embeddings=embeddings, selected_idx=sel_idx, quality_scores=qs,
+            output_dir=out, debug=True, single_set_plots=False,
+        )
+
+        c2 = out / "plots" / "selection" / "quality_criteria" / "DR_plots" / "2D_DR_plots"
+        c3 = out / "plots" / "selection" / "quality_criteria" / "DR_plots" / "3D_DR_plots"
+
+        check((c2 / "selection_criteria.png").exists(), "criteria PCA original present")
+        check((c2 / "selection_criteria_scaled.png").exists(), "criteria PCA scaled present")
+        for name in ["criteria_pca", "criteria_mds", "criteria_tsne",
+                     "criteria_umap", "criteria_isomap", "criteria_lle", "criteria_lda"]:
+            check((c2 / f"{name}.png").exists(), f"{name}.png present (debug=True)")
+            check((c2 / f"clusters_{name}.png").exists(), f"clusters_{name}.png present")
+            check((c3 / f"{name}_3d.html").exists(), f"{name}_3d.html present")
+            check((c3 / f"clusters_{name}_3d.html").exists(), f"clusters_{name}_3d.html present")
+
+        check((c2 / "criteria_lda.png").stat().st_size > 1024, "criteria LDA has content")
 
 
 def test_output_files_non_trivial_size():
@@ -290,7 +332,7 @@ def test_standalone_plot_all_runs():
         out2 = Path(tempfile.mkdtemp())
         try:
             plot_all(input_dir=out, output_dir=out2, debug=False, single_set_plots=False)
-            check((out2 / "plots" / "selection" / "2D_DR_plots" / "selection_embedding.png").exists(),
+            check((out2 / "plots" / "selection" / "embedding_space" / "2D_DR_plots" / "selection_embedding.png").exists(),
                   "standalone plot_all produced output")
         finally:
             shutil.rmtree(out2, ignore_errors=True)
@@ -306,6 +348,30 @@ def test_lda_fallback_single_component():
 
     coords, extra = _reduce_embeddings(embeddings, "lda", selected_idx=sel_idx, n_components=2)
     check(coords.shape[1] == 1, f"LDA with 2 classes → 1 component (got {coords.shape[1]})")
+
+
+def test_lda_cluster_labels_render_2d_3d():
+    """LDA with k-means cluster pseudo-labels renders 2D/3D reductions."""
+    from plotting_process.embedding_plots.base import _reduce_embeddings, kmeans_cluster_labels
+
+    rng = np.random.RandomState(0)
+    embeddings = rng.randn(20, 8).astype(np.float32)
+    sel_idx = np.array([0, 1, 2])
+
+    labels = kmeans_cluster_labels(embeddings, n_clusters=5)
+    check(len(np.unique(labels)) >= 3, "k-means produced >= 3 clusters")
+
+    coords_2d, _ = _reduce_embeddings(
+        embeddings, "lda", selected_idx=sel_idx, n_components=2, labels=labels,
+    )
+    check(coords_2d.shape[1] == 2,
+          f"LDA with cluster labels → 2 components (got {coords_2d.shape[1]})")
+
+    coords_3d, _ = _reduce_embeddings(
+        embeddings, "lda", selected_idx=sel_idx, n_components=3, labels=labels,
+    )
+    check(coords_3d.shape[1] == 3,
+          f"LDA with cluster labels → 3 components (got {coords_3d.shape[1]})")
 
 
 def test_mds_no_future_warning():

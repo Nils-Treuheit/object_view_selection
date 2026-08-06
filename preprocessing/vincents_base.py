@@ -24,6 +24,9 @@ class VincentSoftFilter(BaseFilter):
     direction = None
     # softness in robust-MADs
     softness = None
+    # threshold/outlier variant knobs applied to the fit weight (0,1]
+    threshold_min = None
+    outlier_z = None
 
     def evaluate(self, observation):
 

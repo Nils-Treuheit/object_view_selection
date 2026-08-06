@@ -8,8 +8,16 @@ the actual frames side by side.
 
 Two frontends share the same algorithms (`embedding_explorer_tool/algorithms.py`):
 
-- **Web app** — everything in one browser window, interactive Plotly **3D**.
-- **tkinter app** — offline desktop mirror with an embedded matplotlib **2D** scatter.
+- **Web app** — everything in one browser window, interactive Plotly figure with a
+  **2D/3D** switch.
+- **tkinter app** — offline desktop mirror with an embedded matplotlib scatter,
+  also switchable between **2D** and **3D**, on a bright/white background.
+
+The MDS projection itself is a **pure MDS** of the embedding space (metric MDS
+over cosine distance, `algorithms.project_mds`) computed without any knowledge
+of the k-means clusters. The cluster colours, xNN candidates, centroids and
+final picks are drawn on top of that fixed projection afterwards, so switching
+clusters (`k`, `init`, `xNN`) never changes the point positions.
 
 ## Inputs
 
@@ -21,12 +29,28 @@ and the dataset root:
 | `embeddings.npy`, `selection_pool_ids.npy`, `quality.csv`, `report.json` | pipeline `--output_dir` |
 | `images/`, `masks/` | dataset `--data_root` (default taken from `report.json`) |
 
+If `--output_dir` has **no snapshot** yet (`embeddings.npy` +
+`selection_pool_ids.npy` missing), the app **generates it first** from
+`--data_root`: it runs the same pre-filtering, quality scoring and embedding
+stages as `run.py`, writes the snapshot into `--output_dir`, and only then
+launches. That means you can point the tool at a dataset that was never
+pipelined and explore it immediately.
+
 ## Web app
 
 ```bash
+# Point at an existing pipeline output
 python -m embedding_explorer_tool.webapp
 python -m embedding_explorer_tool.webapp --output_dir ./outputs
 python -m embedding_explorer_tool.webapp --output_dir ./outputs --data_root /path/to/bottle
+
+# Generate a fresh snapshot from a dataset, then explore it
+python -m embedding_explorer_tool.webapp \
+    --output_dir ./outputs_embedding_explorer \
+    --data_root /path/to/triprong \
+    --embedding dinov2 --embedding_model dinov2_vitb14_reg
+
+# Custom port / no auto-open
 python -m embedding_explorer_tool.webapp --port 9000 --no-browser
 ```
 
@@ -34,10 +58,17 @@ Arguments:
 
 | Argument | Default | Effect |
 |----------|---------|--------|
-| `--output_dir` | last verified run | Pipeline snapshot directory |
-| `--data_root` | from `report.json` | Dataset root with `images/` and `masks/` |
+| `--output_dir` | `outputs_embedding_explorer` | Snapshot directory. Created and populated from `--data_root` when it has no snapshot yet |
+| `--data_root` | from `report.json` | Dataset root with `images/` and `masks/`. Required when `--output_dir` has no snapshot |
+| `--embedding` | `auto` | Embedding type used only when generating a fresh snapshot (`auto` infers from `--embedding_model`). Same choices and default as `run.py` |
+| `--embedding_model` | `facebook/dinov3-vitb16-pretrain-lvd1689m` | Model name or path for snapshot generation; type inferred automatically when `--embedding=auto`. Same default as `run.py` |
 | `--port` | `8510` | Local server port |
 | `--no-browser` | off | Do not auto-open the browser |
+
+The embedding choices mirror `run.py`: `auto`, `dinov3`, `dinov2`, `siglip2`,
+`siglip`, `moonvit`, `clip`, `eva_clip`. Re-running against an `--output_dir`
+that already holds a snapshot ignores these flags and loads the saved
+embeddings as-is.
 
 The page loads `plotly.min.js` from the vendored copy in
 `embedding_explorer_tool/static/`, so it works fully offline.
@@ -47,8 +78,9 @@ The page loads `plotly.min.js` from the vendored copy in
 ```
 ┌─────────────────────────────┬──────────────────────┐
 │  k (clusters) | init | xNN  │  Frame ID | Show     │  <- controls
+│  Run | 2D/3D                │                      │
 ├─────────────────────────────┼──────────────────────┤
-│  Interactive 3D MDS (plotly)│  Frame + mask viewer │
+│  Interactive MDS (plotly)   │  Frame + mask viewer │
 │                             │                      │
 │                             ├──────────────────────┤
 │                             │  Scrollable text     │
@@ -56,7 +88,7 @@ The page loads `plotly.min.js` from the vendored copy in
 └─────────────────────────────┴──────────────────────┘
 ```
 
-### Markers in the 3D plot
+### Markers in the plot
 
 | Marker | Meaning |
 |--------|---------|
@@ -79,6 +111,9 @@ dimmed to 66 %). The tooltip shows the sample ID and quality.
   considered for a centroid it is closer to than to any other centroid;
   medoid fallback when the whole neighbourhood is dropped.
 - **Run** — recomputes k-means + xNN and redraws the plot.
+- **2D / 3D** — switches the plotly figure between a 2D scatter (first two MDS
+  components, the default view) and the 3D scatter (first three components).
+  The projection is the same MDS; only the view changes.
 - **Frame ID / Show Frame** — view any frame directly.
 
 ### Text output
@@ -109,17 +144,25 @@ for the selector.
 ```bash
 python -m embedding_explorer_tool.gui_tk
 python -m embedding_explorer_tool.gui_tk --output_dir ./outputs --data_root /path/to/bottle
+python -m embedding_explorer_tool.gui_tk \
+    --output_dir ./outputs_embedding_explorer \
+    --data_root /path/to/triprong \
+    --embedding dinov2 --embedding_model dinov2_vitb14_reg
 ```
 
-Same controls and semantics as the web app, with an embedded matplotlib **2D**
-MDS scatter (the web app keeps the interactive 3D view). Requires a graphical
-session (no Xvfb available on the current host).
+Same controls and semantics as the web app, with an embedded matplotlib MDS
+scatter on a **white background**. The **View: 2D / 3D** radios in the top
+bar re-run `project_mds` with `n_components = 2` or `3` (the embeddings are
+unchanged) and re-draw the clusters/candidates/picks on the new projection.
+It accepts the same `--output_dir`, `--data_root`, `--embedding` and
+`--embedding_model` arguments (with the same auto-generation behaviour).
+Requires a graphical session (no Xvfb available on the current host).
 
 ## Module layout
 
 | File | Purpose |
 |------|---------|
-| `algorithms.py` | Snapshot loading, quality/farthest seeds, k-means, constrained xNN, 3D MDS, mask overlay, text output |
+| `algorithms.py` | Snapshot loading, quality/farthest seeds, k-means, constrained xNN, pure MDS projection (2D or 3D), mask overlay, text output; `snapshot_exists` / `generate_snapshot` for producing a snapshot from a raw `--data_root` |
 | `webapp_plotting.py` | Plotly figure builder |
 | `webapp.py` | Local HTTP server (`/`, `/api/run`, `/composite/`, `/image/`, `/mask/`) |
 | `webapp_template.html` | Single-page frontend (HTML/CSS/JS) |

@@ -45,29 +45,54 @@ outputs/
         │   ├── quality_score_<feature>_fixed.png
         │   └── quality_score_<feature>_relative.png
         │
-        ├── 2D_DR_plots/
-        │   ├── selection_embedding.png            (PCA, jet, 0-1)
-        │   ├── selection_embedding_scaled.png      (PCA, viridis, min-max)
-        │   ├── embedding_mds.png
-        │   ├── embedding_tsne.png                 (debug only)
-        │   ├── embedding_umap.png                 (debug only)
-        │   ├── embedding_isomap.png               (debug only)
-        │   ├── embedding_lle.png                  (debug only)
-        │   ├── embedding_lda.png                  (debug only)
+        ├── embedding_space/                    (DR of the embedding space)
+        │   ├── 2D_DR_plots/
+        │   │   ├── selection_embedding.png      (PCA, jet, 0-1)
+        │   │   ├── selection_embedding_scaled.png  (PCA, viridis, min-max)
+        │   │   ├── embedding_mds.png
+        │   │   ├── embedding_tsne.png          (debug only)
+        │   │   ├── embedding_umap.png          (debug only)
+        │   │   ├── embedding_isomap.png        (debug only)
+        │   │   ├── embedding_lle.png           (debug only)
+        │   │   ├── embedding_lda.png           (debug only — now renders via k-means cluster pseudo-labels)
+        │   │   └── clusters_embedding_<method>.png  (same coords, coloured by k-means cluster)
+        │   └── 3D_DR_plots/
+        │       ├── selection_embedding_3d.html (PCA, interactive plotly)
+        │       ├── embedding_mds_3d.html
+        │       ├── embedding_tsne_3d.html      (debug only)
+        │       ├── embedding_umap_3d.html      (debug only)
+        │       ├── embedding_isomap_3d.html    (debug only)
+        │       ├── embedding_lle_3d.html       (debug only)
+        │       ├── embedding_lda_3d.html       (debug only)
+        │       └── clusters_embedding_<method>_3d.html
         │
-        ├── 3D_DR_plots/
-        │   ├── selection_embedding_3d.html        (PCA, interactive plotly)
-        │   ├── embedding_mds_3d.html
-        │   ├── embedding_tsne_3d.html             (debug only)
-        │   ├── embedding_umap_3d.html             (debug only)
-        │   ├── embedding_isomap_3d.html           (debug only)
-        │   ├── embedding_lle_3d.html              (debug only)
-        │   ├── embedding_lda_3d.html              (debug only)
+        ├── quality_criteria/                   (DR of the normalised metric space)
+        │   └── DR_plots/
+        │       ├── 2D_DR_plots/
+        │       │   ├── selection_criteria.png     (PCA, jet, 0-1)
+        │       │   ├── selection_criteria_scaled.png
+        │       │   ├── criteria_mds.png
+        │       │   ├── criteria_tsne.png          (debug only)
+        │       │   ├── criteria_umap.png          (debug only)
+        │       │   ├── criteria_isomap.png        (debug only)
+        │       │   ├── criteria_lle.png           (debug only)
+        │       │   ├── criteria_lda.png           (debug only)
+        │       │   └── clusters_criteria_<method>.png
+        │       └── 3D_DR_plots/
+        │           ├── selection_criteria_3d.html
+        │           ├── criteria_mds_3d.html
+        │           ├── criteria_tsne_3d.html      (debug only)
+        │           ├── criteria_umap_3d.html      (debug only)
+        │           ├── criteria_isomap_3d.html    (debug only)
+        │           ├── criteria_lle_3d.html       (debug only)
+        │           ├── criteria_lda_3d.html       (debug only)
+        │           └── clusters_criteria_<method>_3d.html
         │
         └── debug (--debug only):
             ├── selected_neighbors_knn.png         (5 nearest neighbours per selected view)
             ├── selected_neighbors_kmeans.png      (5 neighbours from the view's k-means cluster)
-            └── selected_clusters_pca.png          (PCA scatter coloured by k-means cluster)
+            ├── selected_clusters_pca.png          (PCA scatter coloured by k-means cluster)
+            └── embedded_samples/samples_<NN>.png  (original, mask, 224×224 input, input+mask)
 ```
 
 ## Plot Descriptions
@@ -140,7 +165,7 @@ Per-feature diagnostics covering **every feature** (all pre-filter raw stats plu
 
 Horizontal bar chart counting how many observations were rejected by each filter module, sorted largest first and using descriptive labels. **Occlusion** (hand or other object covering the object) and **truncation** (object cut off at the frame edge) are always kept as two separate bars so the two failure modes never merge. The truncation bar aggregates both truncation detectors (`border` and `vincent_border_pixel`); all other raw reasons (`occlusion`, `small_object`, `blur`, `incomplete_shape`, ...) each keep their own bar.
 
-### 2D Embedding Scatter Plots (`selection/2D_DR_plots/`)
+### 2D Embedding Scatter Plots (`selection/embedding_space/2D_DR_plots/`)
 
 Each point is an observation projected into 2D via a dimensionality reduction technique. Non-selected points are colour-mapped by quality score; selected points are marked with numbered black-outlined circles. Grey connection lines (PCA only) trace each non-selected view to its nearest selected neighbour by cosine similarity.
 
@@ -151,9 +176,22 @@ Each point is an observation projected into 2D via a dimensionality reduction te
 | `embedding_mds.png` | MDS | viridis | [min, max] |
 | `embedding_*.png` | t-SNE / UMAP / Isomap / LLE / LDA | viridis | [min, max] |
 
-### 3D Interactive Scatter Plots (`selection/3D_DR_plots/`)
+Every method also gets a **cluster-coloured twin** (`clusters_embedding_<method>.png`) that reuses the exact same coordinates but colours each point by its k-means cluster (discrete `tab20` colourbar) and marks the selected views as gold stars. k-means is fit over the embedding rows with `k = --n_clusters` (default 10, from the selection's `--kmeans_xnn_k` when run via `run.py`).
 
-Plotly HTML files with the same colour scheme as the 2D variants but in three dimensions. Hover over points to see index and quality score; selected points are labelled with their rank number.
+### 3D Interactive Scatter Plots (`selection/embedding_space/3D_DR_plots/`)
+
+Plotly HTML files with the same colour scheme as the 2D variants but in three dimensions. Hover over points to see index and quality score; selected points are labelled with their rank number. The cluster-coloured variants (`clusters_embedding_<method>_3d.html`) use the same discrete k-means colouring.
+
+### Quality-Criteria DR Plots (`selection/quality_criteria/DR_plots/`)
+
+The same dimensionality-reduction method set run over the **normalised quality-criteria matrix** instead of the embedding vectors. Each observation is a vector of its per-criterion metrics (Laplacian, Tenengrad, area ratio, border ratio, edge ratio, hand overlap, Vincent area/artifact fractions, boundary-blur variance, solidity, extent, convexity, completeness, and the quality components `blur`/`area`/`occlusion`/`confidence`), min-max scaled column-wise to `[0, 1]` so no single criterion dominates. Columns missing on any observation are dropped, so the plot degrades gracefully with partial metric data. Cluster labels are k-means over the criteria matrix itself (default `k = --n_clusters`). LDA renders here too because the k-means clusters provide the class labels LDA needs for 2D/3D.
+
+| File | Meaning |
+|------|---------|
+| `selection_criteria.png` | PCA, quality-score colour, jet [0, 1] |
+| `selection_criteria_scaled.png` | PCA, quality-score colour, viridis [min, max] |
+| `criteria_<method>.png` / `criteria_<method>_3d.html` | quality-coloured DR per method |
+| `clusters_criteria_<method>.png` / `_3d.html` | cluster-coloured DR per method |
 
 ## Debug Mode
 
@@ -163,7 +201,7 @@ By default only **PCA** and **MDS** plots are generated. Pass `--debug` (or set 
 - UMAP
 - Isomap
 - LLE
-- LDA (only when both selected and non-selected classes have ≥ 1 sample)
+- LDA (class labels are k-means clusters over the space, so the 2D/3D reductions always render; without enough clusters it degrades to the selected-vs-non-selected single component and is skipped gracefully)
 
 ### Embedding Neighbour Diagnostics (`selection/`)
 
@@ -180,8 +218,10 @@ These are pure diagnostics: they never change the pipeline output.
 Re-generate plots from a previous pipeline run without re-running the pipeline:
 
 ```bash
-python -m plotting_process.wrapper --input_dir /path/to/pipeline/outputs [--output_dir /path/to/plots] [--debug]
+python -m plotting_process.wrapper --input_dir /path/to/pipeline/outputs [--output_dir /path/to/plots] [--debug] [--n_clusters K]
 ```
+
+`--n_clusters` controls the k-means clusters used for LDA labels and the `clusters_*` plots (default 10; match the pipeline's `--kmeans_xnn_k` for consistency).
 
 If `--output_dir` is omitted, the `plots/` folder (and the top-level `bad_examples/` folder) is created inside `--input_dir`. The pipeline-result files (`report.json`, `rejected.json`, `quality.csv`, …) are always read from `--input_dir`.
 
@@ -208,7 +248,7 @@ The pipeline must have saved these files (all are saved by default):
 | **UMAP** | umap-learn | Non-linear, preserves topology |
 | **Isomap** | sklearn.manifold | Non-linear, geodesic distances |
 | **LLE** | sklearn.manifold | Non-linear, local linear patches |
-| **LDA** | sklearn.discriminant_analysis | Supervised, maximises class separation (selected vs non-selected) |
+| **LDA** | sklearn.discriminant_analysis | Supervised, maximises class separation (classes = k-means clusters over the space) |
 
 ## Submodule Architecture
 

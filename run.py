@@ -33,43 +33,53 @@ from quality.vincent import (
 )
 
 
+def _maybe_variant(f, conf):
+    """Wrap a pre-filter in a threshold/outlier variant when configured."""
+    threshold_min = getattr(conf, "threshold_min", None)
+    outlier_z = getattr(conf, "outlier_z", None)
+    if threshold_min is None and outlier_z is None:
+        return f
+    from preprocessing.variants import FilterVariant
+    return FilterVariant(f, threshold_min=threshold_min, outlier_z=outlier_z)
+
+
 def build_filters(cfg: PipelineConfig, tuned=None):
     if tuned is None:
         tuned = {}
 
     available = {
-        "blur": BlurFilter(
+        "blur": _maybe_variant(BlurFilter(
             laplacian_threshold=tuned.get("laplacian_threshold", cfg.filters.blur.threshold),
             tenengrad_threshold=tuned.get("tenengrad_threshold", cfg.filters.blur.tenengrad_threshold),
             enabled=cfg.filters.blur.enabled,
-        ),
-        "area": AreaFilter(
+        ), cfg.filters.blur),
+        "area": _maybe_variant(AreaFilter(
             minimum_ratio=tuned.get("area_minimum_ratio", cfg.filters.area.minimum_ratio),
             enabled=cfg.filters.area.enabled,
-        ),
-        "border": BorderFilter(
+        ), cfg.filters.area),
+        "border": _maybe_variant(BorderFilter(
             maximum_ratio=tuned.get("border_maximum_ratio", cfg.filters.border.maximum_ratio),
             edge_maximum_ratio=tuned.get("border_edge_maximum_ratio", cfg.filters.border.edge_maximum_ratio),
             enabled=cfg.filters.border.enabled,
-        ),
-        "occlusion": OcclusionFilter(
+        ), cfg.filters.border),
+        "occlusion": _maybe_variant(OcclusionFilter(
             maximum_overlap=tuned.get("occlusion_maximum_overlap", cfg.filters.occlusion.maximum_overlap),
             enabled=cfg.filters.occlusion.enabled,
-        ),
-        "confidence": ConfidenceFilter(
+        ), cfg.filters.occlusion),
+        "confidence": _maybe_variant(ConfidenceFilter(
             minimum_confidence=cfg.filters.confidence.minimum_confidence,
             enabled=cfg.filters.confidence.enabled,
-        ),
-        "completeness": CompletenessFilter(
+        ), cfg.filters.confidence),
+        "completeness": _maybe_variant(CompletenessFilter(
             minimum_score=tuned.get("completeness_minimum_score", cfg.filters.completeness.minimum_score),
             enabled=cfg.filters.completeness.enabled,
-        ),
-        "vincent_empty_mask": VincentEmptyMaskFilter(
+        ), cfg.filters.completeness),
+        "vincent_empty_mask": _maybe_variant(VincentEmptyMaskFilter(
             enabled=cfg.filters.vincent_empty_mask.enabled,
-        ),
-        "vincent_border_pixel": VincentBorderPixelFilter(
+        ), cfg.filters.vincent_empty_mask),
+        "vincent_border_pixel": _maybe_variant(VincentBorderPixelFilter(
             enabled=cfg.filters.vincent_border_pixel.enabled,
-        ),
+        ), cfg.filters.vincent_border_pixel),
     }
     filters = []
     for name in cfg.filters.filter_order:
@@ -78,27 +88,35 @@ def build_filters(cfg: PipelineConfig, tuned=None):
     return FilterPipeline(filters)
 
 
+def _soft_with_variant(f, conf):
+    f.threshold_min = getattr(conf, "threshold_min", None)
+    f.outlier_z = getattr(conf, "outlier_z", None)
+    return f
+
+
 def build_soft_filters(cfg: PipelineConfig):
     """Population-adapted soft pre-filters (ported from nit_view_selection).
 
     These never hard-reject: they compute raw per-observation stats and then a
     population pass turns those stats into robust selection weights in (0, 1].
+    Optional ``threshold_min`` / ``outlier_z`` knobs add a rejection pass on
+    the fit weights (see ``reject_soft_variants``).
     """
     return {
-        "vincents_area": VincentsAreaFilter(
+        "vincents_area": _soft_with_variant(VincentsAreaFilter(
             softness=cfg.filters.vincents_area.softness,
             enabled=cfg.filters.vincents_area.enabled,
-        ),
-        "vincents_artefacts": VincentsArtifactsFilter(
+        ), cfg.filters.vincents_area),
+        "vincents_artefacts": _soft_with_variant(VincentsArtifactsFilter(
             softness=cfg.filters.vincents_artefacts.softness,
             kernel_size=cfg.filters.vincents_artefacts.kernel_size,
             enabled=cfg.filters.vincents_artefacts.enabled,
-        ),
-        "vincents_motion_blur": VincentsMotionBlurFilter(
+        ), cfg.filters.vincents_artefacts),
+        "vincents_motion_blur": _soft_with_variant(VincentsMotionBlurFilter(
             softness=cfg.filters.vincents_motion_blur.softness,
             stroke_width=cfg.filters.vincents_motion_blur.stroke_width,
             enabled=cfg.filters.vincents_motion_blur.enabled,
-        ),
+        ), cfg.filters.vincents_motion_blur),
     }
 
 
@@ -290,7 +308,7 @@ def compute_quality_floor(quality_scores, num_views: int, cfg) -> float:
     return float(floor)
 
 
-def _save_samples(observations, kind, data_root, output_dir):
+def _save_samples(observations, kind, data_root, output_dir, group=None):
     """Copy observations into ``{kind}_samples/<obj_id>/{rgb,mask,depth?,hand_mask?}``.
 
     The ``<obj_id>`` folder is named exactly like the last component of
@@ -301,10 +319,17 @@ def _save_samples(observations, kind, data_root, output_dir):
       depth/        frame-wise depth information (only when a matching file
                     exists in ``<data_root>/depth``)
       hand_mask/    hand masks (only when a hand mask exists for the frame)
+
+    When ``group`` is given the observations are additionally nested under a
+    ``{kind}_samples/<group>/<obj_id>/...`` subfolder (used to split rejected
+    observations by their rejection reason).
     """
     root = Path(data_root)
     obj_id = root.name or "dataset"
-    base = Path(output_dir) / f"{kind}_samples" / obj_id
+    if group:
+        base = Path(output_dir) / f"{kind}_samples" / group / obj_id
+    else:
+        base = Path(output_dir) / f"{kind}_samples" / obj_id
 
     rgb_dir = base / "rgb"
     mask_dir = base / "mask"
@@ -370,6 +395,37 @@ def save_rejected_samples(rejected, data_root, output_dir):
     return _save_samples(rejected, "rejected", data_root, output_dir)
 
 
+def save_rejected_samples_by_reason(rejected, data_root, output_dir):
+    """Group rejected tuples by rejection reason into per-filter subfolders.
+
+    Writes ``rejected_samples/<reason>/<obj_id>/{rgb,mask,depth?,hand_mask?}``
+    so a run shows *why* every frame was rejected at a glance. The reason is
+    sanitised so it can never escape the ``rejected_samples`` folder.
+    """
+    by_reason = {}
+    for obs in rejected:
+        reason = (obs.rejection_reason or "unknown").replace("/", "_")
+        by_reason.setdefault(reason, []).append(obs)
+    bases = []
+    for reason in sorted(by_reason):
+        bases.append(_save_samples(by_reason[reason], "rejected", data_root, output_dir, group=reason))
+    if rejected:
+        print(f"Rejected samples grouped by reason saved to {Path(output_dir) / 'rejected_samples'}")
+    return bases
+
+
+def save_accepted_samples(unselected, data_root, output_dir):
+    """Copy the accepted-but-unselected tuples into ``accepted_samples/<obj_id>/``.
+
+    Same ``rgb/``, ``mask/``, ``depth/`` and ``hand_mask/`` layout as the
+    selected/rejected dumps; these frames passed the pre-filter and quality
+    floor but were not picked by the selection step.
+    """
+    if not unselected:
+        return None
+    return _save_samples(unselected, "accepted", data_root, output_dir)
+
+
 def run_pipeline(cfg: PipelineConfig):
     output_dir = Path(cfg.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -400,6 +456,10 @@ def run_pipeline(cfg: PipelineConfig):
     accepted = []
     rejected = []
 
+    if filter_pipeline.requires_fit:
+        print("Fitting pre-filter outlier statistics on the population...")
+        filter_pipeline.fit_observations(dataset.observations)
+
     for obs in tqdm(dataset.observations, desc="Pre-filtering"):
         if not filter_pipeline.run(obs):
             rejected.append(obs)
@@ -409,6 +469,9 @@ def run_pipeline(cfg: PipelineConfig):
     print(f"Accepted: {len(accepted)}, Rejected: {len(rejected)}")
 
     apply_soft_filters(soft_filters, accepted, rejected)
+
+    from preprocessing.variants import reject_soft_variants
+    reject_soft_variants(soft_filters, accepted, rejected)
 
     if cfg.debug:
         rejection_counts = {}
@@ -428,6 +491,43 @@ def run_pipeline(cfg: PipelineConfig):
 
     if len(accepted) == 0:
         print("No observations passed filtering. Exiting.")
+        return
+
+    if cfg.only_pre_filter:
+        if cfg.save_rejected:
+            save_rejected_samples_by_reason(rejected, cfg.data_root, output_dir)
+        save_accepted_samples(accepted, cfg.data_root, output_dir)
+
+        rejected_data = [
+            {"id": obs.id, "reason": obs.rejection_reason}
+            for obs in rejected
+        ]
+        with open(output_dir / "rejected.json", "w") as f:
+            json.dump(rejected_data, f, indent=2)
+
+        rejected_metrics_csv = []
+        for obs in rejected:
+            m = obs.metrics
+            rejected_metrics_csv.append({
+                "id": obs.id,
+                "laplacian": m.laplacian,
+                "tenengrad": m.tenengrad,
+                "area_ratio": m.area_ratio,
+                "border_ratio": m.border_ratio,
+                "edge_ratio": m.edge_ratio,
+                "hand_overlap": m.hand_overlap,
+                "completeness": m.completeness,
+                "vincent_pixel_count": m.vincent_pixel_count,
+                "vincent_touches_border": m.vincent_touches_border,
+                "vincent_area_fraction": m.vincent_area_fraction,
+                "vincent_artifact_fraction": m.vincent_artifact_fraction,
+                "vincent_boundary_blur_variance": m.vincent_boundary_blur_variance,
+            })
+        import pandas as pd
+        pd.DataFrame(rejected_metrics_csv).to_csv(output_dir / "rejected_metrics.csv", index=False)
+
+        print(f"\nPre-filter only (--only_pre_filter): accepted {len(accepted)}, rejected {len(rejected)}")
+        print("Stopped before quality scoring / embedding / selection / plots.")
         return
 
     for obs in tqdm(accepted, desc="Scoring quality"):
@@ -543,8 +643,12 @@ def run_pipeline(cfg: PipelineConfig):
     if selected:
         save_selected_samples(selected, cfg.data_root, output_dir)
 
+    if cfg.debug:
+        unselected = [obs for obs in accepted if obs.id not in selected_set]
+        save_accepted_samples(unselected, cfg.data_root, output_dir)
+
     if cfg.save_rejected:
-        save_rejected_samples(rejected, cfg.data_root, output_dir)
+        save_rejected_samples_by_reason(rejected, cfg.data_root, output_dir)
     rejected_data = [
         {"id": obs.id, "reason": obs.rejection_reason}
         for obs in rejected
@@ -686,7 +790,7 @@ def run_pipeline(cfg: PipelineConfig):
     if cfg.save_plots:
         try:
             from utils.plotting import plot_all
-            plot_all(accepted, rejected, selected, embeddings, selected_idx, pool_quality, output_dir, single_set_plots=cfg.debug, debug=cfg.debug, pool_obs=pool)
+            plot_all(accepted, rejected, selected, embeddings, selected_idx, pool_quality, output_dir, single_set_plots=cfg.debug, debug=cfg.debug, pool_obs=pool, n_clusters=cfg.kmeans_xnn_k)
         except Exception as e:
             print(f"Plotting failed: {e}")
 
@@ -738,6 +842,10 @@ if __name__ == "__main__":
                         help="Generate pipeline diagnostic plots")
     parser.add_argument("--debug", action="store_true",
                         help="Verbose terminal output with per-step statistics; also enables single-set violin plots (requires --plot)")
+    parser.add_argument("--only_pre_filter", action="store_true",
+                        help="Stop right after the pre-filter stage: dump accepted_samples/ "
+                             "and per-reason rejected_samples/, write rejected.json + "
+                             "rejected_metrics.csv, then exit before selection")
     args = parser.parse_args()
 
     cfg = PipelineConfig(
@@ -752,6 +860,7 @@ if __name__ == "__main__":
         auto_thresholds=not args.no_auto_thresholds,
         save_plots=args.save_plots,
         debug=args.debug,
+        only_pre_filter=args.only_pre_filter,
     )
     if args.selector_alpha is not None:
         cfg.selector_alpha = args.selector_alpha

@@ -1,10 +1,11 @@
 """tkinter + embedded matplotlib mirror of the embedding explorer.
 
-Same semantics as the web app but fully offline in a desktop window with a
-**2D** MDS scatter on the left (cluster colours, quality-linked alpha, stars
-for centroids, black-outlined dots for xNN candidates), an image viewer with
-the mask overlay and a scrollable text output on the right, and text fields
-for k, x and a frame ID.
+Same semantics as the web app but fully offline in a desktop window with an
+MDS scatter on the left (cluster colours, quality-linked alpha, stars for
+centroids, black-outlined dots for xNN candidates) that can be switched
+between **2D** and **3D**, an image viewer with the mask overlay and a
+scrollable text output on the right, and text fields for k, x and a frame ID.
+The scatter uses a bright/white background.
 
 Run::
 
@@ -20,6 +21,11 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 matplotlib.use("TkAgg")
+matplotlib.rcParams["axes.facecolor"] = "white"
+matplotlib.rcParams["figure.facecolor"] = "white"
+matplotlib.rcParams["savefig.facecolor"] = "white"
+matplotlib.rcParams["axes.edgecolor"] = "#333333"
+matplotlib.rcParams["grid.color"] = "#cccccc"
 
 import tkinter as tk
 import tkinter.font as tkfont
@@ -45,11 +51,15 @@ def _cluster_palette(n):
     return [cmap(i % 20) for i in range(n)]
 
 
-def plot_result(ax, coords, quality, labels, result, pool_ids):
-    """Draw the 2D MDS scatter for one kMeans + xNN run on ``ax``.
+def plot_result(ax, coords, quality, labels, result, pool_ids, dims="2d"):
+    """Draw the MDS scatter for one kMeans + xNN run on ``ax``.
 
-    Returns a list of ``(artist_id, frame_ids)`` used to resolve pick events.
+    ``dims`` is ``"2d"`` or ``"3d"`` (matplotlib projection selected by the
+    caller).  The cluster labels / xNN candidates / picks are only post-hoc
+    markers and colours drawn over the fixed MDS projection.  Returns a list
+    of ``(artist_id, frame_ids)`` used to resolve pick events.
     """
+    is_3d = dims == "3d"
     coords = np.asarray(coords, dtype=float)
     labels = np.asarray(labels, dtype=int)
     ids = np.asarray(pool_ids, dtype=int)
@@ -59,16 +69,25 @@ def plot_result(ax, coords, quality, labels, result, pool_ids):
     palette = _cluster_palette(k)
 
     x, y = coords[:, 0], coords[:, 1]
+    z = coords[:, 2] if is_3d else None
     ax.clear()
     mapping = []
+
+    def _z(sel):
+        return z[sel] if is_3d else None
+
+    def _scatter(xv, yv, sel, **kwargs):
+        if is_3d:
+            return ax.scatter(xv, yv, z[sel], **kwargs)
+        return ax.scatter(xv, yv, **kwargs)
 
     for c in range(k):
         mask = labels == c
         if not mask.any():
             continue
         rgba = [(palette[c][0], palette[c][1], palette[c][2], float(a)) for a in quality[mask]]
-        artist = ax.scatter(
-            x[mask], y[mask],
+        artist = _scatter(
+            x[mask], y[mask], mask,
             s=32, c=rgba,
             label="Pool samples" if c == 0 else None,
             picker=6,
@@ -77,8 +96,8 @@ def plot_result(ax, coords, quality, labels, result, pool_ids):
 
         cand = np.asarray(clusters[c]["candidates"], dtype=int)
         cand_colors = [palette[c][:3]] * len(cand)
-        artist = ax.scatter(
-            x[cand], y[cand],
+        artist = _scatter(
+            x[cand], y[cand], cand,
             s=110, c=cand_colors,
             edgecolors="black", linewidths=1.8, picker=6,
         )
@@ -86,8 +105,8 @@ def plot_result(ax, coords, quality, labels, result, pool_ids):
 
     medoid = np.asarray([clusters[c]["medoid"] for c in range(k)], dtype=int)
     medoid_colors = [palette[c][:3] for c in range(k)]
-    artist = ax.scatter(
-        x[medoid], y[medoid],
+    artist = _scatter(
+        x[medoid], y[medoid], medoid,
         s=360, c=medoid_colors, marker="*",
         edgecolors="black", linewidths=1.0, label="Centroid (medoid frame)",
         picker=8,
@@ -95,34 +114,54 @@ def plot_result(ax, coords, quality, labels, result, pool_ids):
     mapping.append((id(artist), ids[medoid]))
 
     picks = np.asarray(result["picks"], dtype=int)
-    artist = ax.scatter(
-        x[picks], y[picks],
+    artist = _scatter(
+        x[picks], y[picks], picks,
         s=300, c="#FFD700", marker="*",
         edgecolors="black", linewidths=1.2, label="Final pick",
         picker=8,
     )
     mapping.append((id(artist), ids[picks]))
 
-    ax.scatter([], [], s=32, c="grey", label="xNN candidates")
+    ax.scatter([], [], **({"zs": _z(np.array([], dtype=int))} if is_3d else {}),
+               s=32, c="grey", label="xNN candidates")
     ax.set_xlabel("MDS-1")
     ax.set_ylabel("MDS-2")
-    ax.set_title(f"2D MDS of kMeans clusters (k={k}, init={result['init']}, xNN={result['x']})")
+    if is_3d:
+        ax.set_zlabel("MDS-3")
+    ax.set_title(f"{dims.upper()} MDS of kMeans clusters (k={k}, init={result['init']}, xNN={result['x']})")
     ax.legend(loc="upper left", fontsize=8, framealpha=0.7)
     ax.margins(0.08)
     return mapping
 
 
 class ExplorerApp:
-    def __init__(self, root, output_dir, data_root):
+    def __init__(self, root, output_dir, data_root, embedding=algorithms.DEFAULT_EMBEDDING,
+                 embedding_model=algorithms.DEFAULT_EMBEDDING_MODEL, auto_thresholds=True):
         self.root = root
         self._configure_fonts()
 
-        self.snapshot = algorithms.load_snapshot(output_dir)
+        self.output_dir = Path(output_dir)
+        if not algorithms.snapshot_exists(self.output_dir):
+            if not data_root:
+                raise FileNotFoundError(
+                    f"No snapshot in {self.output_dir} and no --data_root given to generate one. "
+                    "Pass --data_root (dataset root with images/ and masks/) or point --output_dir "
+                    "at an existing pipeline output."
+                )
+            print(f"No snapshot in {self.output_dir}; generating embeddings first ...")
+            algorithms.generate_snapshot(
+                self.output_dir,
+                data_root,
+                embedding=embedding,
+                embedding_model=embedding_model,
+                auto_thresholds=auto_thresholds,
+            )
+
+        self.snapshot = algorithms.load_snapshot(self.output_dir)
         self.embeddings = self.snapshot["embeddings"]
         self.pool_ids = self.snapshot["pool_ids"]
         self.quality = self.snapshot["quality"]
         self.coords = algorithms.project_mds(self.embeddings, n_components=2)
-
         root_path = Path(data_root) if data_root else Path(self.snapshot.get("data_root") or "")
         self.data_root = root_path
         self._image_dir = root_path / "images"
@@ -166,6 +205,13 @@ class ExplorerApp:
 
         ttk.Button(top, text="Run", command=self._on_run).pack(side=tk.LEFT, padx=(0, 24))
 
+        ttk.Label(top, text="View:").pack(side=tk.LEFT)
+        self.dims_var = tk.StringVar(value="2d")
+        ttk.Radiobutton(top, text="2D", value="2d", variable=self.dims_var,
+                        command=self._on_dims_change).pack(side=tk.LEFT)
+        ttk.Radiobutton(top, text="3D", value="3d", variable=self.dims_var,
+                        command=self._on_dims_change).pack(side=tk.LEFT, padx=(0, 12))
+
         ttk.Label(top, text="Frame ID:").pack(side=tk.LEFT)
         self.frame_var = tk.StringVar(value="0")
         ttk.Entry(top, textvariable=self.frame_var, width=8).pack(side=tk.LEFT, padx=(2, 6))
@@ -179,9 +225,9 @@ class ExplorerApp:
 
         left = ttk.Frame(main)
         left.grid(row=0, column=0, sticky="nsew")
-        self.fig = Figure(figsize=(7, 6.5), dpi=110, facecolor="#15171e")
+        self.fig = Figure(figsize=(7, 6.5), dpi=110, facecolor="white")
         self.ax = self.fig.add_subplot(111)
-        self.ax.set_facecolor("#0d0f14")
+        self.ax.set_facecolor("white")
         self.fig.subplots_adjust(left=0.07, right=0.98, top=0.94, bottom=0.08)
         self.canvas = FigureCanvasTkAgg(self.fig, master=left)
         self.canvas.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True)
@@ -193,23 +239,41 @@ class ExplorerApp:
         right.rowconfigure(0, weight=3)
         right.rowconfigure(1, weight=2)
 
-        self.image_label = tk.Label(right, anchor="center", background="#000")
+        self.image_label = tk.Label(right, anchor="center", background="#f5f5f5")
         self.image_label.grid(row=0, column=0, sticky="nsew", pady=(0, 8))
 
         self.text_out = scrolledtext.ScrolledText(
             right, wrap=tk.NONE, state=tk.DISABLED,
-            font=(MONO_FONT_FAMILY, 11), background="#0d0f14", foreground="#e6e6e6",
-            insertbackground="#e6e6e6",
+            font=(MONO_FONT_FAMILY, 11), background="white", foreground="#111111",
+            insertbackground="#111111",
         )
         self.text_out.grid(row=1, column=0, sticky="nsew")
 
     def run(self, k, init, x):
         self.result = algorithms.run_kmeans_xnn(self.embeddings, self.quality, k, init, x)
+        self._render()
+
+    def _render(self):
+        dims = self.dims_var.get()
+        self._ensure_axes(dims)
+        n_components = 3 if dims == "3d" else 2
+        if self.coords.shape[1] != n_components:
+            self.coords = algorithms.project_mds(self.embeddings, n_components=n_components)
         mapping = plot_result(self.ax, self.coords, self.quality, self.result["labels"],
-                              self.result, self.pool_ids)
+                              self.result, self.pool_ids, dims=dims)
         self._id_map = dict(mapping)
         self.canvas.draw_idle()
         self._set_text(algorithms.build_text(self.result, self.pool_ids, self.quality))
+
+    def _ensure_axes(self, dims):
+        want_3d = dims == "3d"
+        current_3d = self.ax.name == "3d"
+        if want_3d == current_3d:
+            return
+        self.fig.clf()
+        projection = "3d" if want_3d else None
+        self.ax = self.fig.add_subplot(111, projection=projection)
+        self.ax.set_facecolor("white")
 
     def _set_text(self, text):
         self.text_out.configure(state=tk.NORMAL)
@@ -225,6 +289,10 @@ class ExplorerApp:
         except ValueError:
             return
         self.run(k, init, x)
+
+    def _on_dims_change(self):
+        if self.result is not None:
+            self._render()
 
     def _on_pick(self, event):
         ids = self._id_map.get(id(event.artist))
@@ -266,13 +334,28 @@ class ExplorerApp:
 
 def main():
     parser = argparse.ArgumentParser(description="Embedding explorer desktop app")
-    parser.add_argument("--output_dir", type=str, default="/tmp/opencode/10_verify_out")
+    parser.add_argument("--output_dir", type=str, default="outputs_embedding_explorer",
+                        help="Pipeline output dir with embeddings.npy / quality.csv; "
+                             "created and populated from --data_root when it has no snapshot")
     parser.add_argument("--data_root", type=str, default="",
                         help="Dataset root with images/ and masks/ (default: from report.json)")
+    parser.add_argument("--embedding", type=str, default=algorithms.DEFAULT_EMBEDDING,
+                        choices=algorithms.EMBEDDING_CHOICES,
+                        help="Embedding type used when generating a fresh snapshot "
+                             "(auto=infer from --embedding_model); unused when a snapshot exists")
+    parser.add_argument("--embedding_model", type=str, default=algorithms.DEFAULT_EMBEDDING_MODEL,
+                        help="Model name or path for embedding generation; "
+                             "unused when a snapshot exists")
     args = parser.parse_args()
 
     root = tk.Tk()
-    ExplorerApp(root, args.output_dir, args.data_root)
+    ExplorerApp(
+        root,
+        args.output_dir,
+        args.data_root,
+        embedding=args.embedding,
+        embedding_model=args.embedding_model,
+    )
     root.mainloop()
 
 

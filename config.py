@@ -6,12 +6,18 @@ class BlurConfig:
     enabled: bool = True
     threshold: float = 120.0
     tenengrad_threshold: float = 35.0
+    # threshold/outlier variants: absolute very-low-quality score cutoff and
+    # robust extreme-bad-outlier removal (see preprocessing/variants.py).
+    threshold_min: float | None = None
+    outlier_z: float | None = None
 
 
 @dataclass
 class AreaConfig:
     enabled: bool = True
     minimum_ratio: float = 0.01
+    threshold_min: float | None = None
+    outlier_z: float | None = None
 
 
 @dataclass
@@ -19,40 +25,55 @@ class BorderConfig:
     enabled: bool = True
     maximum_ratio: float = 0.05
     edge_maximum_ratio: float = 0.25
+    threshold_min: float | None = None
+    outlier_z: float | None = None
 
 
 @dataclass
 class OcclusionConfig:
     enabled: bool = True
     maximum_overlap: float = 0.15
+    threshold_min: float | None = None
+    outlier_z: float | None = None
 
 
 @dataclass
 class ConfidenceConfig:
     enabled: bool = False
     minimum_confidence: float = 0.5
+    threshold_min: float | None = None
+    outlier_z: float | None = None
 
 
 @dataclass
 class CompletenessConfig:
     enabled: bool = True
     minimum_score: float = 0.65
+    threshold_min: float | None = None
+    outlier_z: float | None = None
 
 
 @dataclass
 class VincentEmptyMaskConfig:
     enabled: bool = True
+    threshold_min: float | None = None
+    outlier_z: float | None = None
 
 
 @dataclass
 class VincentBorderPixelConfig:
     enabled: bool = True
+    threshold_min: float | None = None
+    outlier_z: float | None = None
 
 
 @dataclass
 class VincentsAreaConfig:
     enabled: bool = True
     softness: float = 0.3
+    # threshold/outlier variants on the fit (0,1] weight (see preprocessing/variants.py)
+    threshold_min: float | None = None
+    outlier_z: float | None = None
 
 
 @dataclass
@@ -60,6 +81,8 @@ class VincentsArtifactsConfig:
     enabled: bool = True
     softness: float = 3.0
     kernel_size: int = 3
+    threshold_min: float | None = None
+    outlier_z: float | None = None
 
 
 @dataclass
@@ -73,6 +96,8 @@ class VincentsMotionBlurConfig:
     # bottle), so this excludes the motion-blurred tail that the soft weight
     # would otherwise merely down-rank. 0 disables the hard reject.
     hard_min_variance: float = 120.0
+    threshold_min: float | None = None
+    outlier_z: float | None = None
 
 
 @dataclass
@@ -169,3 +194,8 @@ class PipelineConfig:
     save_embeddings: bool = True
     save_plots: bool = False
     debug: bool = False
+
+    # stop after the pre-filter stage (no quality scoring / embedding /
+    # selection / plots); still dumps accepted_samples/ and
+    # rejected_samples/<reason>/
+    only_pre_filter: bool = False

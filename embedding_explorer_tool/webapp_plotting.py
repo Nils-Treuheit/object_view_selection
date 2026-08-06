@@ -1,4 +1,9 @@
-"""Plotly 3D figure builder for the web app."""
+"""Plotly figure builder for the web app (2D or 3D).
+
+The MDS projection itself is computed cluster-independently (``algorithms.project_mds``);
+the cluster labels, xNN candidates, centroids and final picks are only post-hoc
+markers/colors drawn on top of those fixed coordinates.
+"""
 
 import numpy as np
 import plotly.express as px
@@ -20,14 +25,24 @@ def _quality_colors(hex_color, quality):
     return [_rgba(hex_color, float(a)) for a in quality]
 
 
-def build_figure(coords, quality, labels, result, pool_ids):
-    """Build the interactive 3D MDS figure for a kMeans + xNN run.
+def _trace(dims, x, y, z, **kwargs):
+    if dims == "3d":
+        return go.Scatter3d(x=x, y=y, z=z, **kwargs)
+    return go.Scatter(x=x, y=y, **kwargs)
 
-    Pool samples are drawn as dots coloured per cluster with opacity linked to
-    their quality score; each cluster's constrained xNN candidates are shown as
-    slightly larger dots with a thick black outline; the centroid (medoid
-    frame) of every cluster is a larger star; the final pick is a gold star.
+
+def build_figure(coords, quality, labels, result, pool_ids, dims="2d"):
+    """Build the interactive MDS figure for a kMeans + xNN run.
+
+    ``dims`` is ``"3d"`` (Scatter3d over the first three MDS components) or
+    ``"2d"`` (Scatter over the first two).  Pool samples are drawn as dots
+    coloured per cluster with opacity linked to their quality score; each
+    cluster's constrained xNN candidates are shown as slightly larger dots
+    with a thick black outline; the centroid (medoid frame) of every cluster
+    is a larger star; the final pick is a gold star.
     """
+    if dims not in ("2d", "3d"):
+        dims = "3d"
     coords = np.asarray(coords, dtype=float)
     labels = np.asarray(labels, dtype=int)
     ids = np.asarray(pool_ids, dtype=int)
@@ -35,7 +50,8 @@ def build_figure(coords, quality, labels, result, pool_ids):
     clusters = result["clusters"]
     k = result["k"]
 
-    x, y, z = coords[:, 0], coords[:, 1], coords[:, 2]
+    x, y = coords[:, 0], coords[:, 1]
+    z = coords[:, 2] if coords.shape[1] > 2 else None
 
     fig = go.Figure()
 
@@ -49,10 +65,8 @@ def build_figure(coords, quality, labels, result, pool_ids):
 
         custom = np.stack([ids[mask], quality[mask]], axis=1)
         fig.add_trace(
-            go.Scatter3d(
-                x=x[mask],
-                y=y[mask],
-                z=z[mask],
+            _trace(
+                dims, x[mask], y[mask], z[mask] if z is not None else None,
                 mode="markers",
                 marker=dict(
                     size=5,
@@ -70,10 +84,8 @@ def build_figure(coords, quality, labels, result, pool_ids):
         if cand:
             cm = np.asarray(cand, dtype=int)
             fig.add_trace(
-                go.Scatter3d(
-                    x=x[cm],
-                    y=y[cm],
-                    z=z[cm],
+                _trace(
+                    dims, x[cm], y[cm], z[cm] if z is not None else None,
                     mode="markers",
                     marker=dict(
                         size=8,
@@ -92,10 +104,8 @@ def build_figure(coords, quality, labels, result, pool_ids):
     medoid_colors = [CLUSTER_COLORS[c % len(CLUSTER_COLORS)] for c in range(k)]
     m = np.asarray(medoid_ids, dtype=int)
     fig.add_trace(
-        go.Scatter3d(
-            x=x[m],
-            y=y[m],
-            z=z[m],
+        _trace(
+            dims, x[m], y[m], z[m] if z is not None else None,
             mode="markers+text",
             text=["\u2605"] * k,
             textposition="middle center",
@@ -115,10 +125,8 @@ def build_figure(coords, quality, labels, result, pool_ids):
 
     pick_ids = np.asarray(result["picks"], dtype=int)
     fig.add_trace(
-        go.Scatter3d(
-            x=x[pick_ids],
-            y=y[pick_ids],
-            z=z[pick_ids],
+        _trace(
+            dims, x[pick_ids], y[pick_ids], z[pick_ids] if z is not None else None,
             mode="markers+text",
             text=["\u2605"] * len(pick_ids),
             textposition="middle center",
@@ -136,19 +144,24 @@ def build_figure(coords, quality, labels, result, pool_ids):
         )
     )
 
-    fig.update_layout(
+    layout = dict(
         autosize=True,
         margin=dict(l=0, r=0, t=44, b=0),
         legend=dict(orientation="h", yanchor="bottom", y=1.0, xanchor="left", x=0.0),
-        scene=dict(
+        paper_bgcolor="rgba(0,0,0,0)",
+        font=dict(color="#ddd"),
+    )
+    if dims == "3d":
+        layout["scene"] = dict(
             xaxis_title="MDS-1",
             yaxis_title="MDS-2",
             zaxis_title="MDS-3",
             bgcolor="rgba(0,0,0,0)",
-        ),
-        paper_bgcolor="rgba(0,0,0,0)",
-        font=dict(color="#ddd"),
-    )
+        )
+    else:
+        layout["xaxis"] = dict(title="MDS-1", gridcolor="#3a3f55")
+        layout["yaxis"] = dict(title="MDS-2", gridcolor="#3a3f55")
+    fig.update_layout(**layout)
     return fig
 
 

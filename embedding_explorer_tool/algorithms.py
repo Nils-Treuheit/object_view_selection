@@ -19,6 +19,119 @@ from sklearn.metrics import pairwise_distances
 
 DEFAULT_XNN_K = 3
 
+SNAPSHOT_FILES = ("embeddings.npy", "selection_pool_ids.npy")
+
+DEFAULT_EMBEDDING = "auto"
+DEFAULT_EMBEDDING_MODEL = "facebook/dinov3-vitb16-pretrain-lvd1689m"
+EMBEDDING_CHOICES = ["auto", "dinov3", "dinov2", "siglip2", "siglip", "moonvit", "clip", "eva_clip"]
+
+
+def snapshot_exists(output_dir: str | Path) -> bool:
+    """True when an explorer snapshot (embeddings + pool ids) is already present."""
+    out = Path(output_dir)
+    return all((out / name).exists() for name in SNAPSHOT_FILES)
+
+
+def generate_snapshot(output_dir: str | Path, data_root: str, embedding: str = DEFAULT_EMBEDDING,
+                      embedding_model: str = DEFAULT_EMBEDDING_MODEL, auto_thresholds: bool = True):
+    """Generate the explorer snapshot in ``output_dir`` from ``data_root``.
+
+    Runs the same pre-filter + quality-scoring + embedding stages as
+    ``run.py`` so the explorer shows a real, quality-weighted pool instead of
+    raw frames.  Writes ``embeddings.npy``, ``selection_pool_ids.npy``,
+    ``quality.csv`` (aligned by sample id) and a ``report.json`` with the
+    ``data_root`` / embedding settings, which is exactly the snapshot
+    ``load_snapshot`` reads.
+    """
+    from config import PipelineConfig
+    from data_io.dataset import Dataset
+    from run import (
+        apply_soft_filters,
+        build_embedding_model,
+        build_filters,
+        build_quality_scorer,
+        build_soft_filters,
+    )
+    from preprocessing.variants import reject_soft_variants
+    from tqdm import tqdm
+    from utils.threshold_tuner import tune_thresholds
+
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    cfg = PipelineConfig(
+        data_root=data_root,
+        output_dir=str(output_dir),
+        embedding=embedding,
+        embedding_model=embedding_model,
+        auto_thresholds=auto_thresholds,
+    )
+
+    print(f"Generating snapshot in {output_dir} from {cfg.data_root} ...")
+    dataset = Dataset(cfg.data_root)
+    dataset.load_images()
+    print(f"Loaded {len(dataset)} observations")
+
+    tuned = {}
+    if cfg.auto_thresholds:
+        print("Computing data-driven thresholds...")
+        tuned = tune_thresholds(dataset.observations)
+
+    filter_pipeline = build_filters(cfg, tuned)
+    quality_scorer = build_quality_scorer(cfg, tuned)
+    soft_filters = build_soft_filters(cfg)
+    model = build_embedding_model(cfg)
+
+    if filter_pipeline.requires_fit:
+        print("Fitting pre-filter outlier statistics on the population...")
+        filter_pipeline.fit_observations(dataset.observations)
+
+    accepted = []
+    rejected = []
+    for obs in tqdm(dataset.observations, desc="Pre-filtering"):
+        if not filter_pipeline.run(obs):
+            rejected.append(obs)
+            continue
+        accepted.append(obs)
+    print(f"Accepted: {len(accepted)}, Rejected: {len(rejected)}")
+
+    apply_soft_filters(soft_filters, accepted, rejected)
+    reject_soft_variants(soft_filters, accepted, rejected)
+
+    for obs in tqdm(accepted, desc="Scoring quality"):
+        quality_scorer.score(obs)
+
+    pool = accepted
+    if len(pool) < 2:
+        raise RuntimeError(
+            f"Only {len(pool)} observation(s) passed pre-filtering; the explorer needs "
+            "at least 2 to project and cluster. Loosen the pre-filter config or use a "
+            "different dataset."
+        )
+    embeddings = []
+    pool_ids = []
+    pool_quality = []
+    for obs in tqdm(pool, desc="Extracting embeddings"):
+        embeddings.append(model.encode(obs.image, obs.mask))
+        pool_ids.append(obs.id)
+        pool_quality.append(obs.quality)
+
+    np.save(output_dir / "embeddings.npy", np.asarray(embeddings))
+    np.save(output_dir / "selection_pool_ids.npy", np.asarray(pool_ids, dtype=int))
+
+    import pandas as pd
+    pd.DataFrame({"id": pool_ids, "quality": pool_quality}).to_csv(
+        output_dir / "quality.csv", index=False
+    )
+
+    report = {
+        "data_root": cfg.data_root,
+        "embedding": cfg.embedding,
+        "embedding_model": cfg.embedding_model,
+    }
+    (output_dir / "report.json").write_text(json.dumps(report, indent=2))
+    print(f"Snapshot ready: {len(pool)} samples embedded with {embedding_model}")
+
 
 def load_snapshot(output_dir: str | Path):
     """Load a pipeline snapshot from an output directory.

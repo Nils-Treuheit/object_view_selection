@@ -460,3 +460,47 @@ def test_vincent_weights_tighten_weakest_link():
         assert expected <= min(m.blur, m.area, m.occlusion, m.completeness), (
             "vincent weights tighten the weakest-link bound"
         )
+
+
+def test_build_filters_wraps_configured_hard_variants():
+    from preprocessing.variants import FilterVariant
+    from run import build_filters
+    from config import PipelineConfig
+
+    cfg = PipelineConfig(auto_thresholds=False)
+    cfg.filters.blur.threshold_min = 5.0
+    cfg.filters.area.outlier_z = 3.0
+
+    pipeline = build_filters(cfg, tuned={})
+
+    wrapped = {}
+    for f in pipeline.filters:
+        if isinstance(f, FilterVariant):
+            wrapped[type(f.inner).__name__] = f
+
+    assert "BlurFilter" in wrapped, "blur wrapped with threshold_min"
+    assert wrapped["BlurFilter"].threshold_min == 5.0
+    assert wrapped["BlurFilter"].outlier_z is None
+
+    assert "AreaFilter" in wrapped, "area wrapped with outlier_z"
+    assert wrapped["AreaFilter"].outlier_z == 3.0
+
+    assert pipeline.requires_fit, "pipeline requires population fit for outlier mode"
+
+
+def test_build_soft_filters_propagates_knobs():
+    from run import build_soft_filters
+    from config import PipelineConfig
+
+    cfg = PipelineConfig(auto_thresholds=False)
+    cfg.filters.vincents_area.threshold_min = 0.3
+    cfg.filters.vincents_motion_blur.outlier_z = 3.0
+
+    soft_filters = build_soft_filters(cfg)
+
+    assert soft_filters["vincents_area"].threshold_min == 0.3
+    assert soft_filters["vincents_area"].outlier_z is None
+    assert soft_filters["vincents_motion_blur"].outlier_z == 3.0
+    assert soft_filters["vincents_motion_blur"].threshold_min is None
+    assert soft_filters["vincents_artefacts"].threshold_min is None
+    assert soft_filters["vincents_artefacts"].outlier_z is None
