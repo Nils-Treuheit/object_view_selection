@@ -31,8 +31,8 @@ class DINOv3Embedding(EmbeddingModel):
         return self._dim
 
     def encode(self, image: np.ndarray, mask: np.ndarray) -> np.ndarray:
-        from embeddings.crop import padded_square_crop
-        crop = padded_square_crop(image, mask, size=224)
+        from embeddings.crop import contrast_input
+        crop = contrast_input(image, mask, self.background, size=224)
         crop = (crop / 255.0).astype(np.float32)
         mean = np.array([0.485, 0.456, 0.406], dtype=np.float32)
         std = np.array([0.229, 0.224, 0.225], dtype=np.float32)

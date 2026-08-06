@@ -383,6 +383,9 @@ Supports
 - padded crop
 - square crop
 - resized crop
+- mask growth (dilation)
+- dataset-wide maximum-contrast background (`compute_contrast_background`: bright border set → black, dark border set → white)
+- contrast composite input (`contrast_input`: grown-mask crop on the static background)
 
 ---
 

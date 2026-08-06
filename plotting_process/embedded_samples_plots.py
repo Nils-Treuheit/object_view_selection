@@ -3,7 +3,12 @@ Debug plots comparing the original frames against the embedding model's input.
 
 Each figure is a 4x4 image matrix: one row per randomly sampled observation,
 with the original frame, the original + mask overlay, the embedding model's
-actual 224x224 input (``padded_square_crop``) and that input + its mask.
+actual 224x224 input (``contrast_input``: grown-mask crop of the object on the
+static maximum-contrast background) and that input + its grown mask.
+
+The static background (black for bright-border objects, white for dark-border
+objects) is computed over the whole pool with ``compute_contrast_background``;
+pass ``background`` to reuse the value the embedding model was set to.
 
 Output lands in ``<output_dir>/embedded_samples/samples_<n>.png`` (a sibling
 of ``plots/`` and ``bad_examples/``).
@@ -15,7 +20,13 @@ import cv2
 import numpy as np
 from matplotlib import pyplot as plt
 
-from embeddings.crop import padded_square_crop
+from embeddings.crop import (
+    compute_contrast_background,
+    contrast_input,
+    grow_mask,
+)
+
+GROW_PX = 5
 
 
 def _get_image_mask(obs):
@@ -45,7 +56,7 @@ def _mask_overlay(image, mask, color=(0, 255, 0), alpha=0.5):
 
 
 def _square_mask(mask, size=224):
-    """Mirror of ``padded_square_crop`` applied to the mask itself."""
+    """Mirror of ``contrast_input`` applied to the mask itself."""
     mask = np.asarray(mask) > 0
     ys, xs = np.where(mask)
     if len(ys) == 0:
@@ -61,17 +72,24 @@ def _square_mask(mask, size=224):
     return np.array(Image.fromarray(square).resize((size, size), Image.LANCZOS))
 
 
-def plot_embedded_samples(pool_obs, output_dir, n_figures=3, n_examples=4, random_state=0):
+def plot_embedded_samples(pool_obs, output_dir, n_figures=3, n_examples=4, random_state=0,
+                          background=None):
     """Write ``embedded_samples/samples_<n>.png`` debug figures.
 
     ``pool_obs`` are the selection-pool observations (must carry image/mask or
     loadable ``image_path`` / ``mask_path``). Samples are drawn at random with
-    a fixed seed so the output is reproducible.
+    a fixed seed so the output is reproducible. ``background`` (0 or 255) is
+    the static contrast background; when None it is computed from ``pool_obs``
+    itself.
     """
     pool = [o for o in pool_obs]
     if not pool:
         print("  embedded_samples: empty pool, skipping")
         return None
+
+    if background is None:
+        background = compute_contrast_background(pool)
+    bg_name = "black" if background == 0 else "white"
 
     out_dir = Path(output_dir) / "embedded_samples"
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -96,8 +114,9 @@ def plot_embedded_samples(pool_obs, output_dir, n_figures=3, n_examples=4, rando
                 axes[r, 0].set_title(f"frame {obs.id} (unavailable)", fontsize=9)
                 continue
 
-            model_input = padded_square_crop(image, mask, size=224)
-            square_m = _square_mask(mask, size=224) if mask is not None else None
+            model_input = contrast_input(image, mask, background, grow=GROW_PX, size=224)
+            grown = grow_mask(mask, grow=GROW_PX) if mask is not None else None
+            square_m = _square_mask(grown, size=224) if mask is not None else None
 
             cells = [
                 (image, None, "original"),
@@ -113,8 +132,8 @@ def plot_embedded_samples(pool_obs, output_dir, n_figures=3, n_examples=4, rando
                 ax.set_title(f"{label}\nframe {obs.id}", fontsize=9)
                 ax.axis("off")
 
-        fig.suptitle(f"Embedding model input vs original frame — random sample {figure_no + 1}",
-                     fontsize=12)
+        fig.suptitle(f"Embedding model input vs original frame — static {bg_name} background, "
+                     f"random sample {figure_no + 1}", fontsize=12)
         fig.tight_layout(rect=(0, 0, 1, 0.96))
         path = out_dir / f"samples_{figure_no + 1:02d}.png"
         fig.savefig(path, dpi=150, facecolor="white")

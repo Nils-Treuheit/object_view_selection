@@ -2,7 +2,7 @@ import numpy as np
 import torch
 
 from .base import EmbeddingModel
-from .crop import padded_square_crop
+from .crop import contrast_input
 
 
 class DINOv2Embedding(EmbeddingModel):
@@ -51,7 +51,7 @@ class DINOv2Embedding(EmbeddingModel):
         return self._dim
 
     def encode(self, image: np.ndarray, mask: np.ndarray) -> np.ndarray:
-        crop = padded_square_crop(image, mask, size=224)
+        crop = contrast_input(image, mask, self.background, size=224)
         crop = (crop / 255.0).astype(np.float32)
         mean = np.array([0.485, 0.456, 0.406], dtype=np.float32)
         std = np.array([0.229, 0.224, 0.225], dtype=np.float32)

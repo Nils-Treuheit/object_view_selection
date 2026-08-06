@@ -575,6 +575,12 @@ def run_pipeline(cfg: PipelineConfig):
             feat = extract_shape_descriptor(obs, cfg.shape_descriptor)
             obs.embedding = feat
     else:
+        from embeddings.crop import compute_contrast_background
+        background = compute_contrast_background(pool)
+        embedding_model.set_background(background)
+        if cfg.debug:
+            print(f"  Static contrast background over {len(pool)} pool samples: "
+                  f"{'black' if background == 0 else 'white'}")
         for obs in tqdm(pool, desc="Extracting embeddings"):
             obs.embedding = embedding_model.encode(obs.image, obs.mask)
 

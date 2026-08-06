@@ -108,6 +108,11 @@ def generate_snapshot(output_dir: str | Path, data_root: str, embedding: str = D
             "at least 2 to project and cluster. Loosen the pre-filter config or use a "
             "different dataset."
         )
+    from embeddings.crop import compute_contrast_background
+    background = compute_contrast_background(pool)
+    model.set_background(background)
+    print(f"  Static contrast background over {len(pool)} pool samples: "
+          f"{'black' if background == 0 else 'white'}")
     embeddings = []
     pool_ids = []
     pool_quality = []

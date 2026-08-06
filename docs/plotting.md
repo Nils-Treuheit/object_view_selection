@@ -92,7 +92,7 @@ outputs/
             ├── selected_neighbors_knn.png         (5 nearest neighbours per selected view)
             ├── selected_neighbors_kmeans.png      (5 neighbours from the view's k-means cluster)
             ├── selected_clusters_pca.png          (PCA scatter coloured by k-means cluster)
-            └── embedded_samples/samples_<NN>.png  (original, mask, 224×224 input, input+mask)
+            └── embedded_samples/samples_<NN>.png  (original, mask, 224×224 input on contrast bg, input+mask)
 ```
 
 ## Plot Descriptions

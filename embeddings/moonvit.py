@@ -3,7 +3,7 @@ import numpy as np
 import torch
 
 from .base import EmbeddingModel
-from .crop import padded_square_crop
+from .crop import contrast_input
 
 
 _MOONVIT_PATCHED = False
@@ -49,7 +49,7 @@ class MoonViTEmbedding(EmbeddingModel):
         return self._dim
 
     def encode(self, image: np.ndarray, mask: np.ndarray) -> np.ndarray:
-        crop = padded_square_crop(image, mask, size=224)
+        crop = contrast_input(image, mask, self.background, size=224)
         from PIL import Image
         pil = Image.fromarray(crop)
         inputs = self.processor(images=pil, return_tensors="pt")

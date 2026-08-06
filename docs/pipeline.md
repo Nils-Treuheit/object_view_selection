@@ -314,10 +314,13 @@ Enable with `--use_shape_descriptors`.
 
 ### Cropping
 
-Before encoding, images are cropped to the object bounding box (dilated slightly) and resized to 224×224. Two crop modes are available:
+Before encoding, images are cropped to the object bounding box (grown by 5 px), composited onto a **static maximum-contrast background**, and resized to 224×224:
 
-- **Bbox crop:** crops the image to object bounding box
-- **Masked crop:** applies the mask to the bbox crop (black background)
+- **Contrast background (embedding input):** the background colour is chosen *once* over the whole pool from the mask-border pixels of every observation. A mostly bright border set maps to black (0), a mostly dark border set maps to white (255), so the object always sits on the most contrasty backdrop possible. The object's own mask pixels keep their content; everything else in the grown crop (the 5 px margin + any padding) is the background colour.
+- **Bbox crop:** crops the image to the object bounding box (used by `compute_contrast_background`).
+- **Masked crop:** applies the mask to the bbox crop (black background).
+
+The crop helpers live in `embeddings/crop.py` (`grow_mask`, `compute_contrast_background`, `contrast_input`). `EmbeddingModel.set_background()` sets the colour computed at run time (`run.py` / the webapp snapshot generator compute it over the pool before encoding); `background=None` keeps the legacy zero-padded square crop.
 
 ---
 
