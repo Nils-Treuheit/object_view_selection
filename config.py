@@ -100,7 +100,10 @@ class VincentBorderPixelConfig:
 class VincentsAreaConfig:
     enabled: bool = True
     softness: float = 0.3
+    # absolute garbage floor on the raw area fraction (0 disables)
+    hard_min_area_fraction: float = 0.0
     # threshold/outlier variants on the fit (0,1] weight (see preprocessing/variants.py)
+    # also used as an extreme-bad-outlier cutoff on the raw stat via fit/evaluate
     threshold_min: float | None = None
     outlier_z: float | None = None
 

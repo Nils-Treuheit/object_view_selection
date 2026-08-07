@@ -13,9 +13,9 @@ import numpy as np
 
 from data_io.observation import Observation
 from preprocessing.filter_pipeline import FilterPipeline
-from preprocessing.area_filter import AreaFilter
-from preprocessing.border_truncation import BorderFilter
-from preprocessing.blur_filter import BlurFilter
+from preprocessing.legacy.area_filter import AreaFilter
+from preprocessing.legacy.border_truncation import BorderFilter
+from preprocessing.legacy.blur_filter import BlurFilter
 
 from pathlib import Path
 

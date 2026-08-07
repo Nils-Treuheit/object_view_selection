@@ -18,11 +18,11 @@ import numpy as np
 from data_io.observation import Observation
 
 from preprocessing.base import BaseFilter
-from preprocessing.blur_filter import BlurFilter
-from preprocessing.area_filter import AreaFilter
-from preprocessing.border_truncation import BorderFilter
-from preprocessing.occlusion_filter import OcclusionFilter
-from preprocessing.completeness_filter import CompletenessFilter
+from preprocessing.legacy.blur_filter import BlurFilter
+from preprocessing.legacy.area_filter import AreaFilter
+from preprocessing.legacy.border_truncation import BorderFilter
+from preprocessing.future_work.occlusion_filter import OcclusionFilter
+from preprocessing.future_work.completeness_filter import CompletenessFilter
 
 from tests.test_utils import (
     check,

@@ -1,12 +1,12 @@
 import cv2
 import numpy as np
 
-from .vincent_utils import (
+from ..vincent_utils import (
     compute_boundary_blur_variance,
     mask_to_foreground,
     robust_center_scale,
 )
-from .vincents_base import VincentSoftFilter
+from ..vincents_base import VincentSoftFilter
 
 
 class VincentsMotionBlurFilter(VincentSoftFilter):

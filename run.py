@@ -9,21 +9,21 @@ from tqdm import tqdm
 
 from config import PipelineConfig
 from data_io.dataset import Dataset
-from preprocessing.area_filter import AreaFilter
+from preprocessing.legacy.area_filter import AreaFilter
 from preprocessing.border_blur_filter import (
     BorderLaplacianBlurFilter,
     BorderTenengradBlurFilter,
 )
-from preprocessing.border_truncation import BorderFilter
-from preprocessing.completeness_filter import CompletenessFilter
-from preprocessing.confidence import ConfidenceFilter
+from preprocessing.legacy.border_truncation import BorderFilter
+from preprocessing.future_work.completeness_filter import CompletenessFilter
+from preprocessing.future_work.confidence import ConfidenceFilter
 from preprocessing.filter_pipeline import FilterPipeline
-from preprocessing.occlusion_filter import OcclusionFilter
+from preprocessing.future_work.occlusion_filter import OcclusionFilter
 from preprocessing.vincent_border_pixel import VincentBorderPixelFilter
 from preprocessing.vincent_empty_mask import VincentEmptyMaskFilter
 from preprocessing.vincents_area_filter import VincentsAreaFilter
 from preprocessing.vincents_artefacts import VincentsArtifactsFilter
-from preprocessing.vincents_motion_blur import VincentsMotionBlurFilter
+from preprocessing.legacy.vincents_motion_blur import VincentsMotionBlurFilter
 from quality.area import AreaQuality
 from quality.blur import BorderBlurQuality
 from quality.centerness import CenternessQuality
@@ -90,7 +90,7 @@ def build_filters(cfg: PipelineConfig, tuned=None):
             enabled=cfg.filters.occlusion.enabled,
         ), cfg.filters.occlusion),
         "confidence": _maybe_variant(ConfidenceFilter(
-            minimum_confidence=cfg.filters.confidence.minimum_confidence,
+            hard_min_confidence=cfg.filters.confidence.minimum_confidence,
             enabled=cfg.filters.confidence.enabled,
         ), cfg.filters.confidence),
         "completeness": _maybe_variant(CompletenessFilter(
@@ -119,14 +119,15 @@ def build_soft_filters(cfg: PipelineConfig):
     diagnostics — none of them feeds the default pre-filter set or the
     4-component quality score. Optional ``threshold_min`` / ``outlier_z``
     knobs add a rejection pass on the fit weights (see
-    ``reject_soft_variants``); ``VincentsMotionBlurFilter`` additionally
-    implements both ``BaseFilter`` rejection criteria itself
-    (``hard_min_variance`` absolute floor + ``outlier_z`` population outlier),
-    so it can act as a working pre-filter.
+    ``reject_soft_variants``); both ``VincentsMotionBlurFilter`` and
+    ``VincentsAreaFilter`` additionally implement both ``BaseFilter`` rejection
+    criteria themselves (absolute threshold floor + outlier_z population outlier),
+    so they can act as working pre-filters.
     """
     return {
         "vincents_area": _soft_with_variant(VincentsAreaFilter(
             softness=cfg.filters.vincents_area.softness,
+            hard_min_area_fraction=cfg.filters.vincents_area.hard_min_area_fraction,
             enabled=cfg.filters.vincents_area.enabled,
         ), cfg.filters.vincents_area),
         "vincents_motion_blur": _soft_with_variant(VincentsMotionBlurFilter(

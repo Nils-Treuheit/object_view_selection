@@ -9,14 +9,14 @@ Usage:
 
 import numpy as np
 
-from preprocessing.area_filter import AreaFilter
+from preprocessing.legacy.area_filter import AreaFilter
 from preprocessing.border_blur_filter import (
     BorderLaplacianBlurFilter,
     BorderTenengradBlurFilter,
 )
-from preprocessing.border_truncation import BorderFilter
-from preprocessing.completeness_filter import CompletenessFilter
-from preprocessing.occlusion_filter import OcclusionFilter
+from preprocessing.legacy.border_truncation import BorderFilter
+from preprocessing.future_work.completeness_filter import CompletenessFilter
+from preprocessing.future_work.occlusion_filter import OcclusionFilter
 
 
 def compute_metric_stats(observations):

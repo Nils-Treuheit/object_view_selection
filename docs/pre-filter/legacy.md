@@ -13,7 +13,7 @@ They are registered in `run.py` and can be enabled via `--filter_order` (e.g.
 `--filter_order vincent_empty_mask,blur_laplacian,area`), but the default
 `FilterConfig.filter_order` does not include any of them.
 
-## `AreaFilter` (`preprocessing/area_filter.py`)
+## `AreaFilter` (`preprocessing/legacy/area_filter.py`)
 
 Rejects small objects.
 
@@ -30,7 +30,7 @@ reason = "small_object"
 Superseded by the soft `VincentsAreaFilter` (see
 [vincents_area.md](vincents_area.md)).
 
-## `BorderFilter` (`preprocessing/border_truncation.py`)
+## `BorderFilter` (`preprocessing/legacy/border_truncation.py`)
 
 Rejects objects cut off at the image frame, using two graded measures:
 
@@ -51,53 +51,7 @@ Empty masks are rejected with reason `empty_mask`. The default set instead
 uses the strict binary `VincentBorderPixelFilter`
 ([vincent_border_pixel.md](vincent_border_pixel.md)).
 
-## `OcclusionFilter` (`preprocessing/occlusion_filter.py`)
-
-Rejects objects whose mask overlaps a hand mask beyond `maximum_overlap`
-(requires `object_hand` data; passes everything when it's absent).
-
-| Metric | Field |
-|--------|-------|
-| hand overlap = mask ∩ hand / mask | `metrics.hand_overlap` |
-
-```
-score  = 1 - min(ratio / maximum_overlap, 1)
-passed = ratio <= maximum_overlap            (default maximum_overlap = 0.15)
-reason = "occlusion"
-```
-
-## `ConfidenceFilter` (`preprocessing/confidence.py`)
-
-Rejects observations below a detection-confidence threshold (`minimum_confidence`,
-default 0.5). Reads `observation.confidence`; passes when it's absent.
-
-```
-score  = min(confidence / minimum_confidence, 1)
-passed = confidence >= minimum_confidence
-reason = "low_confidence"
-```
-
-## `CompletenessFilter` (`preprocessing/completeness_filter.py`)
-
-Rejects objects whose visible shape is incomplete, via a weighted blend of
-three contour shape metrics:
-
-| Metric | Weight (default) | Field |
-|--------|------------------|-------|
-| solidity = area / convex-hull area | 0.4 | `metrics.solidity` |
-| extent = area / bounding-rect area | 0.3 | `metrics.extent` |
-| convexity = hull perimeter / perimeter | 0.3 | `metrics.convexity` |
-
-```
-score  = 0.4*solidity + 0.3*extent + 0.3*convexity
-passed = score >= minimum_score              (default minimum_score = 0.65)
-reason = "incomplete_shape"
-```
-
-`metrics.completeness` stores the blended score. Empty masks are rejected with
-reason `empty_mask`.
-
-## `BlurFilter` (`preprocessing/blur_filter.py`)
+## `BlurFilter` (`preprocessing/legacy/blur_filter.py`)
 
 Old whole-image sharpness filter (two thresholds). **Not registered** in
 `run.py`'s `available` map — the boundary-band `blur_laplacian` /

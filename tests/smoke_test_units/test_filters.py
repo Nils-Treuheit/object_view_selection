@@ -38,12 +38,12 @@ def test_filter_basics(ds):
     score, passed, reason = btf.evaluate(obs)
     check(isinstance(score, float), f"Border score={score:.4f}")
 
-    from preprocessing.occlusion_filter import OcclusionFilter
+    from preprocessing.future_work.occlusion_filter import OcclusionFilter
     of = OcclusionFilter(maximum_overlap=0.15, enabled=True)
     score, passed, reason = of.evaluate(obs)
     check(isinstance(score, float), f"Occlusion score={score:.4f}")
 
-    from preprocessing.completeness_filter import CompletenessFilter
+    from preprocessing.future_work.completeness_filter import CompletenessFilter
     cf = CompletenessFilter(minimum_score=0.5, enabled=True)
     score, passed, reason = cf.evaluate(obs)
     check(isinstance(score, float), f"Completeness score={score:.4f}")

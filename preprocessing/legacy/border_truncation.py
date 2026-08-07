@@ -1,6 +1,6 @@
 import numpy as np
 
-from .base import BaseFilter
+from ..base import BaseFilter
 
 
 class BorderFilter(BaseFilter):

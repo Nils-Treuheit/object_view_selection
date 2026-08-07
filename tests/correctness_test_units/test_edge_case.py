@@ -47,7 +47,7 @@ def make_observation(
 
 def test_empty_mask_area_filter():
 
-    from preprocessing.area_filter import AreaFilter
+    from preprocessing.legacy.area_filter import AreaFilter
 
     mask = np.zeros(
         (50, 50),
@@ -69,7 +69,7 @@ def test_empty_mask_area_filter():
 
 def test_full_mask_area_filter():
 
-    from preprocessing.area_filter import AreaFilter
+    from preprocessing.legacy.area_filter import AreaFilter
 
     mask = np.ones(
         (50, 50),
@@ -94,7 +94,7 @@ def test_full_mask_area_filter():
 
 def test_single_pixel_mask():
 
-    from preprocessing.completeness_filter import CompletenessFilter
+    from preprocessing.future_work.completeness_filter import CompletenessFilter
 
     mask = np.zeros(
         (50, 50),
@@ -117,7 +117,7 @@ def test_single_pixel_mask():
 
 def test_border_filter_all_pixels_on_border():
 
-    from preprocessing.border_truncation import BorderFilter
+    from preprocessing.legacy.border_truncation import BorderFilter
 
     mask = np.zeros(
         (50, 50),
@@ -144,7 +144,7 @@ def test_border_filter_all_pixels_on_border():
 
 def test_grayscale_image_handling():
 
-    from preprocessing.blur_filter import BlurFilter
+    from preprocessing.legacy.blur_filter import BlurFilter
 
     gray = (
         np.random.RandomState(0)
@@ -180,7 +180,7 @@ def test_grayscale_image_handling():
 
 def test_tiny_image():
 
-    from preprocessing.blur_filter import BlurFilter
+    from preprocessing.legacy.blur_filter import BlurFilter
 
     image = make_image(
         5,
@@ -206,7 +206,7 @@ def test_tiny_image():
 
 def test_no_hand_occlusion():
 
-    from preprocessing.occlusion_filter import OcclusionFilter
+    from preprocessing.future_work.occlusion_filter import OcclusionFilter
 
     mask = np.ones(
         (50, 50),
@@ -227,7 +227,7 @@ def test_no_hand_occlusion():
 
 def test_hand_without_overlap():
 
-    from preprocessing.occlusion_filter import OcclusionFilter
+    from preprocessing.future_work.occlusion_filter import OcclusionFilter
 
     mask = np.zeros(
         (50, 50),
