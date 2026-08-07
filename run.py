@@ -114,12 +114,15 @@ def _soft_with_variant(f, conf):
 def build_soft_filters(cfg: PipelineConfig):
     """Population-adapted soft pre-filters (ported from nit_view_selection).
 
-    These never hard-reject: they compute raw per-observation stats and then a
-    population pass turns those stats into robust selection weights in (0, 1].
-    They are kept as diagnostics only — none of them feeds the default
-    pre-filter set or the 4-component quality score. Optional
-    ``threshold_min`` / ``outlier_z`` knobs add a rejection pass on the fit
-    weights (see ``reject_soft_variants``).
+    These compute raw per-observation stats and then a population pass turns
+    those stats into robust selection weights in (0, 1]. They are kept as
+    diagnostics — none of them feeds the default pre-filter set or the
+    4-component quality score. Optional ``threshold_min`` / ``outlier_z``
+    knobs add a rejection pass on the fit weights (see
+    ``reject_soft_variants``); ``VincentsMotionBlurFilter`` additionally
+    implements both ``BaseFilter`` rejection criteria itself
+    (``hard_min_variance`` absolute floor + ``outlier_z`` population outlier),
+    so it can act as a working pre-filter.
     """
     return {
         "vincents_area": _soft_with_variant(VincentsAreaFilter(
@@ -129,6 +132,7 @@ def build_soft_filters(cfg: PipelineConfig):
         "vincents_motion_blur": _soft_with_variant(VincentsMotionBlurFilter(
             softness=cfg.filters.vincents_motion_blur.softness,
             stroke_width=cfg.filters.vincents_motion_blur.stroke_width,
+            hard_min_variance=cfg.filters.vincents_motion_blur.hard_min_variance,
             enabled=cfg.filters.vincents_motion_blur.enabled,
         ), cfg.filters.vincents_motion_blur),
     }
@@ -140,11 +144,31 @@ def apply_soft_filters(soft_filters, accepted, rejected=None):
     Raw stats are computed for all observations (accepted + rejected) so the
     diagnostic plots can compare them; population weights are fit only on the
     accepted set (rejected observations do not compete for selection).
+
+    Soft filters that implement the ``BaseFilter`` rejection criteria
+    (``requires_fit`` + ``evaluate`` returning ``passed=False``, e.g. the
+    motion-blur threshold/outlier modes) run their population fit first and
+    move the observations they reject out of ``accepted`` with the annotated
+    reason; already-rejected observations keep their original reason.
     """
-    all_observations = list(accepted) + list(rejected or [])
+    if rejected is None:
+        rejected = []
+    all_observations = list(accepted) + list(rejected)
     for soft_filter in soft_filters.values():
+        # population pass for outlier-mode filters (before per-observation evaluate)
+        if getattr(soft_filter, "requires_fit", lambda: False)():
+            soft_filter.fit(all_observations)
+
         for obs in all_observations:
-            soft_filter.evaluate(obs)
+            _score, passed, reason = soft_filter.evaluate(obs)
+            if passed or obs.rejection_reason is not None:
+                continue
+            obs.rejected = True
+            obs.rejection_reason = reason
+            if obs in accepted:
+                accepted.remove(obs)
+                rejected.append(obs)
+
         soft_filter.fit_weights(accepted)
 
 

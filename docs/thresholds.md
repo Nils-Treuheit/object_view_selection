@@ -93,7 +93,7 @@ Defined in `FilterConfig.filter_order`:
 4. **BlurTenengrad** — boundary-band gradient sharpness
 5. **VincentsArtifacts** — mask artifact score
 
-Filters early in the pipeline reject cheaply before more expensive checks. The population outlier statistics are fit once over the full dataset (`FilterPipeline.fit_observations`) before the main loop. Two Vincent soft filters remain available as population-adapted (0, 1] weights (`VincentsAreaFilter`, `VincentsMotionBlurFilter`) — these never reject and feed `vincents_area` / `vincents_motion_blur`.
+Filters early in the pipeline reject cheaply before more expensive checks. The population outlier statistics are fit once over the full dataset (`FilterPipeline.fit_observations`) before the main loop. Two Vincent soft filters remain available as population-adapted (0, 1] weights feeding `vincents_area` / `vincents_motion_blur` — `VincentsAreaFilter` never rejects, while `VincentsMotionBlurFilter` also implements both rejection criteria itself (see below and `docs/pre-filter/vincents_motion_blur.md`).
 
 ---
 
@@ -114,7 +114,9 @@ The default blur/artifact filters set both knobs by default, e.g. `LaplacianBlur
 
 ### Soft filters (`reject_soft_variants` via `run.py`)
 
-The Vincent soft filters never hard-reject during `evaluate`; they derive a population weight in `(0, 1]`. When `VincentsAreaConfig` or `VincentsMotionBlurConfig` set `threshold_min` or `outlier_z`, the pipeline moves accepted observations whose weight trips the cutoff into `rejected` right after the soft pass, with annotated reasons (`vincents_area_threshold`, `vincents_motion_blur_outlier`, …) so the per-reason sample folders group them cleanly.
+`VincentsAreaFilter` never hard-rejects during `evaluate`; it derives a population weight in `(0, 1]`. When `VincentsAreaConfig` or `VincentsMotionBlurConfig` set `threshold_min` or `outlier_z`, the pipeline moves accepted observations whose weight trips the cutoff into `rejected` right after the soft pass, with annotated reasons (`vincents_area_threshold`, `vincents_motion_blur_outlier`, …) so the per-reason sample folders group them cleanly.
+
+`VincentsMotionBlurFilter` additionally implements both rejection criteria itself inside `evaluate` — the absolute `hard_min_variance` floor on the raw stat and the `outlier_z` population removal on the raw stat (fit via `fit`/`requires_fit`, run by `apply_soft_filters` before the per-observation pass). The weight-based layer above remains available as a complementary path.
 
 ---
 

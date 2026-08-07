@@ -118,14 +118,14 @@ Rejections are grouped on disk under `rejected_samples/<reason>/threshold-based/
 
 ### Soft pre-filters (population-adapted weights, optional)
 
-Two Vincent soft filters remain available (`VincentsAreaFilter`, `VincentsMotionBlurFilter`) and **never reject** in the default wiring. They compute a raw stat per observation, then a population pass converts it into a selection weight in (0, 1] using a robust median/MAD typical scale and a one-sided half-Gaussian falloff on the "bad" side. Raw stats are computed for all observations; the weight pass is fit **on the accepted set only**:
+Two Vincent soft filters remain available (`VincentsAreaFilter`, `VincentsMotionBlurFilter`). They compute a raw stat per observation, then a population pass converts it into a selection weight in (0, 1] using a robust median/MAD typical scale and a one-sided half-Gaussian falloff on the "bad" side. Raw stats are computed for all observations; the weight pass is fit **on the accepted set only**:
 
 ```
 weight = exp(-0.5 * (z / softness)^2),   z = (stat - median) / (MAD * 1.4826)
 ```
 
-- **VincentsAreaFilter** — `stat = vincent_area_fraction = mask_area / canvas_area`. Small masks are penalized (`low_bad`, `softness=0.3`). Weight stored as `vincents_area`.
-- **VincentsMotionBlurFilter** — `stat = vincent_boundary_blur_variance` = variance of the Laplacian restricted to the boundary band. Blurred boundaries are penalized (`low_bad`, `softness=0.3`, `stroke_width=9`). Weight stored as `vincents_motion_blur`. The class supports an absolute `hard_min_variance` floor (reason `motion_blur`), but `build_soft_filters` does **not** forward it, so the floor stays 0.0 and the default pipeline never hard-rejects here.
+- **VincentsAreaFilter** — `stat = vincent_area_fraction = mask_area / canvas_area`. Small masks are penalized (`low_bad`, `softness=0.3`). Weight stored as `vincents_area`. Never rejects.
+- **VincentsMotionBlurFilter** — `stat = vincent_boundary_blur_variance` = variance of the Laplacian restricted to the boundary band. Blurred boundaries are penalized (`low_bad`, `softness=0.3`, `stroke_width=9`). Weight stored as `vincents_motion_blur`. Unlike the area filter it is also a working pre-filter: `evaluate` reports a quality-scaled stat score and implements both `BaseFilter` rejection criteria — an absolute `hard_min_variance` floor (reason `vincents_motion_blur_threshold`, forwarded from config and active by default at 120.0) and a population-based `outlier_z` removal (reason `vincents_motion_blur_outlier`, fit over the population via `fit`/`requires_fit`). See `docs/pre-filter/vincents_motion_blur.md`.
 
 ### Filter Pipeline Order
 
@@ -492,7 +492,7 @@ All pipeline parameters are defined in `config.py`.
 | | `vincents_area.softness` | 0.3 | Area weight falloff (robust-MADs) |
 | | `vincents_motion_blur.softness` | 0.3 | Boundary-blur weight falloff (robust-MADs) |
 | | `vincents_motion_blur.stroke_width` | 9 | Boundary-band stroke width |
-| | `vincents_motion_blur.hard_min_variance` | 120 | Absolute floor on band variance — defined in config but **not forwarded** by `build_soft_filters`, so effectively inactive |
+| | `vincents_motion_blur.hard_min_variance` | 120 | Absolute floor on band variance (active — forwarded by `build_soft_filters`; reason `vincents_motion_blur_threshold`) |
 | | `filter_order` | `[vincent_empty_mask, vincent_border_pixel, blur_laplacian, blur_tenengrad, vincents_artefacts]` | Pre-filter execution order |
 | | `area` / `border` / `occlusion` / `confidence` / `completeness` | — | Legacy filters, custom `--filter_order` only (not tested / likely not working) |
 | **Quality** | `quality_weights.blur` | 0.30 | Boundary-blur quality weight |
