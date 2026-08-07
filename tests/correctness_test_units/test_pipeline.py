@@ -319,10 +319,11 @@ def test_build_filters_includes_vincent_hard_filters():
 
     ordered = cfg.filters.filter_order
     assert ordered.index("vincent_empty_mask") < ordered.index("vincent_border_pixel")
-    assert ordered.index("vincent_border_pixel") < ordered.index("border")
+    assert ordered.index("vincent_border_pixel") < ordered.index("blur_laplacian")
 
 
 def test_build_filters_order_matches_config():
+    from preprocessing.variants import FilterVariant
     from run import build_filters
     from config import PipelineConfig
 
@@ -332,15 +333,20 @@ def test_build_filters_order_matches_config():
     class_to_key = {
         "VincentEmptyMaskFilter": "vincent_empty_mask",
         "VincentBorderPixelFilter": "vincent_border_pixel",
+        "BorderLaplacianBlurFilter": "blur_laplacian",
+        "BorderTenengradBlurFilter": "blur_tenengrad",
+        "VincentsArtifactsFilter": "vincents_artefacts",
         "BorderFilter": "border",
         "AreaFilter": "area",
         "ConfidenceFilter": "confidence",
-        "BlurFilter": "blur",
         "OcclusionFilter": "occlusion",
         "CompletenessFilter": "completeness",
     }
 
-    run_order = [class_to_key[f.__class__.__name__] for f in pipeline.filters]
+    run_order = []
+    for f in pipeline.filters:
+        cls = f.inner if isinstance(f, FilterVariant) else f
+        run_order.append(class_to_key[type(cls).__name__])
     assert run_order == cfg.filters.filter_order, f"order mismatch: {run_order}"
 
 
@@ -362,10 +368,8 @@ def test_apply_soft_filters_populates_weights():
 
     for o in observations:
         assert 0.0 < o.metrics.vincents_area <= 1.0, "vincents_area weight in (0, 1]"
-        assert 0.0 < o.metrics.vincents_artefacts <= 1.0, "vincents_artefacts weight in (0, 1]"
         assert 0.0 < o.metrics.vincents_motion_blur <= 1.0, "vincents_motion_blur weight in (0, 1]"
         assert o.metrics.vincent_area_fraction > 0.0, "area raw stat populated"
-        assert o.metrics.vincent_artifact_fraction >= 0.0, "artifact raw stat populated"
         assert o.metrics.vincent_boundary_blur_variance >= 0.0, "blur raw stat populated"
 
 
@@ -388,7 +392,7 @@ def test_apply_soft_filters_rejected_raw_stats():
     assert rejected[0].metrics.vincents_area == 0.0, "rejected does not get weight"
 
 
-def test_build_quality_scorer_includes_vincent():
+def test_build_quality_scorer_includes_new_components():
     from run import build_quality_scorer
     from config import PipelineConfig
 
@@ -396,20 +400,20 @@ def test_build_quality_scorer_includes_vincent():
     scorer = build_quality_scorer(cfg, tuned={})
 
     names = [m.name for m in scorer.metrics]
-    assert "vincents_area" in names
-    assert "vincents_artefacts" in names
-    assert "vincents_motion_blur" in names
-    assert "blur" in names
-    assert "completeness" in names
+    assert "blur" in names, f"missing blur, got {names}"
+    assert "area" in names, f"missing area, got {names}"
+    assert "vincents_artefacts" in names, f"missing vincents_artefacts, got {names}"
+    assert "centerness" in names, f"missing centerness, got {names}"
+    assert len(names) == 4, f"exactly 4 quality components, got {names}"
+    assert set(scorer.weights) == set(names), "weights match metric names"
 
 
-def test_quality_scorer_vincent_end_to_end():
-    from run import apply_soft_filters, build_filters, build_quality_scorer, build_soft_filters
+def test_quality_scorer_new_components_end_to_end():
+    from run import build_filters, build_quality_scorer
     from config import PipelineConfig
 
     cfg = PipelineConfig(auto_thresholds=False)
     hard = build_filters(cfg, tuned={})
-    soft_filters = build_soft_filters(cfg)
     scorer = build_quality_scorer(cfg, tuned={})
 
     observations = []
@@ -422,22 +426,21 @@ def test_quality_scorer_vincent_end_to_end():
     accepted = [o for o in observations if hard.run(o)]
     assert len(accepted) == len(observations), "all centered circles pass the hard pre-filter"
 
-    apply_soft_filters(soft_filters, accepted)
     for o in accepted:
         scorer.score(o)
 
     for o in accepted:
         assert 0.0 <= o.quality <= 1.0, f"quality in [0, 1], got {o.quality}"
-        assert o.metrics.completeness > 0.0, "completeness populated by hard pre-filter"
+        assert o.metrics.laplacian > 0.0, "boundary laplacian populated by pre-filter"
+        assert o.metrics.blur > 0.0, "blur quality populated by scorer"
 
 
-def test_vincent_weights_tighten_weakest_link():
-    from run import apply_soft_filters, build_filters, build_quality_scorer, build_soft_filters
+def test_confidence_is_weakest_link():
+    from run import build_filters, build_quality_scorer
     from config import PipelineConfig
 
     cfg = PipelineConfig(auto_thresholds=False)
     hard = build_filters(cfg, tuned={})
-    soft_filters = build_soft_filters(cfg)
     scorer = build_quality_scorer(cfg, tuned={})
 
     observations = []
@@ -448,17 +451,15 @@ def test_vincent_weights_tighten_weakest_link():
         observations.append(make_observation(mask, obs_id=i))
 
     accepted = [o for o in observations if hard.run(o)]
-    apply_soft_filters(soft_filters, accepted)
     for o in accepted:
         scorer.score(o)
 
     for o in accepted:
         m = o.metrics
-        expected = min(m.blur, m.area, m.occlusion, m.completeness,
-                       m.vincents_area, m.vincents_artefacts, m.vincents_motion_blur)
+        expected = min(m.blur, m.area, m.vincents_artefacts, m.centerness)
         assert expected > 0.0, "all component scores positive for this population"
-        assert expected <= min(m.blur, m.area, m.occlusion, m.completeness), (
-            "vincent weights tighten the weakest-link bound"
+        assert expected <= min(m.blur, m.area, m.centerness), (
+            "artifact component tightens the weakest-link bound"
         )
 
 
@@ -468,7 +469,10 @@ def test_build_filters_wraps_configured_hard_variants():
     from config import PipelineConfig
 
     cfg = PipelineConfig(auto_thresholds=False)
-    cfg.filters.blur.threshold_min = 5.0
+    cfg.filters.filter_order = [
+        "vincent_empty_mask", "blur_laplacian", "area",
+    ]
+    cfg.filters.blur_laplacian.threshold_min = 0.2
     cfg.filters.area.outlier_z = 3.0
 
     pipeline = build_filters(cfg, tuned={})
@@ -478,9 +482,9 @@ def test_build_filters_wraps_configured_hard_variants():
         if isinstance(f, FilterVariant):
             wrapped[type(f.inner).__name__] = f
 
-    assert "BlurFilter" in wrapped, "blur wrapped with threshold_min"
-    assert wrapped["BlurFilter"].threshold_min == 5.0
-    assert wrapped["BlurFilter"].outlier_z is None
+    assert "BorderLaplacianBlurFilter" in wrapped, "blur_laplacian wrapped with threshold_min"
+    assert wrapped["BorderLaplacianBlurFilter"].threshold_min == 0.2
+    assert wrapped["BorderLaplacianBlurFilter"].outlier_z == 3.0
 
     assert "AreaFilter" in wrapped, "area wrapped with outlier_z"
     assert wrapped["AreaFilter"].outlier_z == 3.0
@@ -498,9 +502,9 @@ def test_build_soft_filters_propagates_knobs():
 
     soft_filters = build_soft_filters(cfg)
 
+    assert "vincents_area" in soft_filters
+    assert "vincents_motion_blur" in soft_filters
     assert soft_filters["vincents_area"].threshold_min == 0.3
     assert soft_filters["vincents_area"].outlier_z is None
     assert soft_filters["vincents_motion_blur"].outlier_z == 3.0
     assert soft_filters["vincents_motion_blur"].threshold_min is None
-    assert soft_filters["vincents_artefacts"].threshold_min is None
-    assert soft_filters["vincents_artefacts"].outlier_z is None

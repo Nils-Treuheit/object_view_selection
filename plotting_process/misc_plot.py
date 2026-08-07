@@ -10,13 +10,24 @@ from matplotlib import pyplot as plt
 # failure mode — the object is cut off / touching the frame edge — so they are
 # aggregated into one "truncation" bar. Occlusion (hand or other object
 # covering the object) is always shown as its own separate bar so the two
-# failure modes never get merged into one bucket.
+# failure modes never get merged into one bucket. The default blur/artifact
+# filters reject either below a relaxed absolute floor (``_threshold``) or as
+# extreme bad outliers relative to the population (``_outlier``).
 REASON_LABELS = {
     "vincent_empty_mask": "empty mask",
     "empty_mask": "empty mask",
     "vincent_border_pixel": "truncation (object out of frame)",
     "border": "truncation (object out of frame)",
     "truncation": "truncation (object out of frame)",
+    "blur_laplacian": "blurred (low boundary sharpness)",
+    "blur_laplacian_threshold": "blurred (below minimum sharpness)",
+    "blur_laplacian_outlier": "blurred (extreme outlier)",
+    "blur_tenengrad": "blurred boundary (low gradient)",
+    "blur_tenengrad_threshold": "blurred boundary (below minimum gradient)",
+    "blur_tenengrad_outlier": "blurred boundary (extreme outlier)",
+    "vincents_artefacts": "mask artifacts",
+    "vincents_artefacts_threshold": "mask artifacts (below minimum quality)",
+    "vincents_artefacts_outlier": "mask artifacts (extreme outlier)",
     "small_object": "small object (low mask area)",
     "low_confidence": "low confidence",
     "blur": "blurred (low sharpness)",

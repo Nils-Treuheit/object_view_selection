@@ -103,13 +103,10 @@ Compare the quality-score distributions of selected vs non-selected (and non-sel
 
 | Score | Definition |
 |-------|-----------|
-| `blur` | Normalised sharpness (Laplacian / 2× threshold) |
+| `blur` | Boundary-band sharpness (Laplacian variance / global anchor) |
 | `area` | Mask pixel area ratio, capped at 20 % |
-| `occlusion` | 1 − hand-overlap ratio |
-| `vincents_area` | Population-adapted mask area weight |
-| `vincents_artefacts` | Population-adapted mask artifact weight |
-| `vincents_motion_blur` | Population-adapted boundary blur weight |
-| `completeness` | Solidity / extent / convexity availability |
+| `vincents_artefacts` | Mask artifact fraction, anchored by `artifacts_max_fraction` |
+| `centerness` | Mask centredness in the frame |
 | `confidence` | Weakest-link score (min of all components) |
 | `score` | Weighted arithmetic mean of all components |
 
@@ -121,22 +118,21 @@ Compare raw metrics of rejected vs accepted observations for the pre-filter crit
 
 | Metric | What it measures |
 |--------|-----------------|
-| Laplacian | Image sharpness (pixel-level variance) |
-| Tenengrad | Gradient magnitude sharpness |
-| Area Ratio | Mask size relative to image area |
-| Border-Free Ratio | 1 − border-touching-pixel fraction |
-| Hand-Free Ratio | 1 − hand-overlap fraction |
-| Completeness | Combined solidity/extent/convexity score |
-| Mask Area Fraction | Vincent soft pre-filter raw stat (mask/canvas area) |
-| Artifact Fraction | Vincent soft pre-filter raw stat (open⊕close / mask pixels) |
-| Boundary Blur Variance | Vincent soft pre-filter raw stat (Laplacian variance in boundary band) |
+| Boundary Laplacian Variance | Boundary-band sharpness (default blur_laplacian pre-filter stat) |
+| Boundary Tenengrad | Boundary-band gradient sharpness (default blur_tenengrad pre-filter stat) |
+| Artifact Fraction | Mask artifact stat (default vincents_artefacts pre-filter) |
+| Boundary Blur Variance | Vincent motion-blur soft stat (Laplacian variance in boundary band) |
+| Mask Area Fraction | Vincent soft stat (mask/canvas area) |
+| Touches Border (hard) | Binary: mask touches the image frame |
+| Mask Pixel Count | Number of mask foreground pixels |
+| Area Ratio / Border Ratio / Edge Ratio / Hand Overlap / Completeness | Legacy filter stats (kept for diagnostics) |
 
 ### Pre-Filter Distribution Plots (`pre-filter/`)
 
 Histograms for **every pre-filter element** for debugging:
 
-- `pre_filter_raw_stats.png` — grid of histograms of each raw stat, accepted (teal) vs rejected (gold). Covers the classic filters (Laplacian, Tenengrad, area, border, edge, hand overlap, completeness) and the Vincent elements (mask pixel count, touches-border flag, area fraction, artifact fraction, boundary blur variance).
-- `pre_filter_soft_weights.png` — histograms of the population-adapted soft weights (`vincents_area`, `vincents_artefacts`, `vincents_motion_blur`) over the accepted set.
+- `pre_filter_raw_stats.png` — grid of histograms of each raw stat, accepted (teal) vs rejected (gold). Covers the default pre-filter stats (boundary Laplacian variance, boundary Tenengrad, artifact fraction, boundary blur variance, mask area fraction, touches-border flag, mask pixel count) and the legacy stats (area ratio, border ratio, edge ratio, hand overlap, completeness).
+- `pre_filter_soft_weights.png` — histograms of the population-adjusted scores over the accepted set: the two remaining soft weights (`vincents_area`, `vincents_motion_blur`) and the artifact score (`vincents_artefacts`).
 
 ### Feature Sample Distribution Plots (`pre-filter/` + `selection/`)
 
@@ -155,7 +151,7 @@ Per-feature diagnostics covering **every feature** (all pre-filter raw stats plu
 
 - `bad_examples/` — lives at the **top level of the output directory** (a sibling of `plots/`), split by pipeline stage:
 
-  - `pre-filter_stage/<feature>_filtered.png` — up to 5 frames **actually rejected for that feature's own reason** (e.g. `area_ratio_filtered.png` shows only frames rejected as "small object (low mask area)"; `laplacian_filtered.png` and `tenengrad_filtered.png` show only blur-rejected frames; the border/edge stats cover the truncation detectors `border` and `vincent_border_pixel`). The absolute worst frame is always shown; the remaining slots are filled worst-first with frames that are **visually distinct** from the ones already shown (thumbnail-level difference), so a run of near-identical consecutive video frames never fills the whole row. If fewer than 5 frames were rejected for that reason, the remaining slots are placeholder tiles.
+  - `pre-filter_stage/<feature>_filtered.png` — up to 5 frames **actually rejected for that feature's own reason(s)** (e.g. `area_ratio_filtered.png` shows only frames rejected as "small object (low mask area)"; `laplacian_filtered.png` shows only frames rejected for `blur_laplacian_threshold` / `blur_laplacian_outlier`; `vincent_artifact_fraction_filtered.png` shows only `vincents_artefacts_threshold` / `vincents_artefacts_outlier`; the border/edge stats cover the truncation detectors `border` and `vincent_border_pixel`). The absolute worst frame is always shown; the remaining slots are filled worst-first with frames that are **visually distinct** from the ones already shown (thumbnail-level difference), so a run of near-identical consecutive video frames never fills the whole row. If fewer than 5 frames were rejected for that reason, the remaining slots are placeholder tiles.
   - `pre-filter_stage/lower_<feature>_quality.png` — produced **only when a feature's reason never fired**: the lowest-quality **accepted** frames per that stat, **probability-sampled** (worst = highest likelihood). Vincent soft stats that can never hard-reject always take this form.
   - `selection_stage/lower_<feature>_quality.png` — for every quality score: the lowest-quality accepted frames, **probability-sampled** the same way.
 
@@ -163,7 +159,7 @@ Per-feature diagnostics covering **every feature** (all pre-filter raw stats plu
 
 ### Rejection Reasons (`pre-filter/`)
 
-Horizontal bar chart counting how many observations were rejected by each filter module, sorted largest first and using descriptive labels. **Occlusion** (hand or other object covering the object) and **truncation** (object cut off at the frame edge) are always kept as two separate bars so the two failure modes never merge. The truncation bar aggregates both truncation detectors (`border` and `vincent_border_pixel`); all other raw reasons (`occlusion`, `small_object`, `blur`, `incomplete_shape`, ...) each keep their own bar.
+Horizontal bar chart counting how many observations were rejected by each filter module, sorted largest first and using descriptive labels. **Occlusion** (hand or other object covering the object) and **truncation** (object cut off at the frame edge) are always kept as two separate bars so the two failure modes never merge. The truncation bar aggregates both truncation detectors (`border` and `vincent_border_pixel`); all other raw reasons (`blur_laplacian_threshold`, `blur_laplacian_outlier`, `blur_tenengrad_*`, `vincents_artefacts_*`, `small_object`, `incomplete_shape`, ...) each keep their own bar — the `_threshold` and `_outlier` variants get their own descriptive labels so below-the-floor rejections stay distinct from extreme-bad-outlier rejections.
 
 ### 2D Embedding Scatter Plots (`selection/embedding_space/2D_DR_plots/`)
 
@@ -184,7 +180,7 @@ Plotly HTML files with the same colour scheme as the 2D variants but in three di
 
 ### Quality-Criteria DR Plots (`selection/quality_criteria/DR_plots/`)
 
-The same dimensionality-reduction method set run over the **normalised quality-criteria matrix** instead of the embedding vectors. Each observation is a vector of its per-criterion metrics (Laplacian, Tenengrad, area ratio, border ratio, edge ratio, hand overlap, Vincent area/artifact fractions, boundary-blur variance, solidity, extent, convexity, completeness, and the quality components `blur`/`area`/`occlusion`/`confidence`), min-max scaled column-wise to `[0, 1]` so no single criterion dominates. Columns missing on any observation are dropped, so the plot degrades gracefully with partial metric data. Cluster labels are k-means over the criteria matrix itself (default `k = --n_clusters`). LDA renders here too because the k-means clusters provide the class labels LDA needs for 2D/3D.
+The same dimensionality-reduction method set run over the **normalised quality-criteria matrix** instead of the embedding vectors. Each observation is a vector of its per-criterion metrics (Laplacian, Tenengrad, area ratio, border ratio, edge ratio, hand overlap, Vincent area/artifact fractions, boundary-blur variance, solidity, extent, convexity, completeness, and the quality components `blur`/`area`/`vincents_artefacts`/`centerness`/`confidence`), min-max scaled column-wise to `[0, 1]` so no single criterion dominates. Columns missing on any observation are dropped, so the plot degrades gracefully with partial metric data. Cluster labels are k-means over the criteria matrix itself (default `k = --n_clusters`). LDA renders here too because the k-means clusters provide the class labels LDA needs for 2D/3D.
 
 | File | Meaning |
 |------|---------|

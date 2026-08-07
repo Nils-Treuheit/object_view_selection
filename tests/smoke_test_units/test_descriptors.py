@@ -5,11 +5,11 @@ Smoke tests for shape descriptors.
 import time
 import numpy as np
 
-from tests.smoke_test_utils import check
+from tests.smoke_test_utils import check, first_usable_observation
 
 
 def test_descriptors(ds):
-    mask = ds.observations[0].mask
+    mask = first_usable_observation(ds).mask
 
     from descriptors.hu import hu_moments
     t0 = time.time()

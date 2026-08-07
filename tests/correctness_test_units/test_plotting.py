@@ -42,8 +42,8 @@ class _MockObs:
 def _make_mock_observations(embeddings, quality_scores, selected_idx):
     keys = ["laplacian", "tenengrad", "area_ratio", "border_ratio",
             "edge_ratio", "hand_overlap", "completeness", "blur", "area",
-            "occlusion", "confidence",
-            "vincents_area", "vincents_artefacts", "vincents_motion_blur",
+            "vincents_artefacts", "centerness", "confidence",
+            "vincents_area", "vincents_motion_blur",
             "vincent_area_fraction", "vincent_artifact_fraction",
             "vincent_boundary_blur_variance"]
     accepted = []
@@ -470,7 +470,7 @@ def test_feature_overview_plots_saved():
                   f"pre-filter/data_set_overview/{name}_relative.png saved")
 
         # quality scores -> selection/data_set_overview/quality_score_*.png
-        for name in ["quality_score_blur", "quality_score_occlusion", "quality_score_score"]:
+        for name in ["quality_score_blur", "quality_score_centerness", "quality_score_score"]:
             check((qual_overview / f"{name}_fixed.png").exists(),
                   f"selection/data_set_overview/{name}_fixed.png saved")
             check((qual_overview / f"{name}_relative.png").exists(),
@@ -839,7 +839,7 @@ def test_fixed_scale_uses_absolute_value_for_bounded_features():
     """Fixed 0..1 plots colour bounded features by their absolute value."""
     from plotting_process.feature_plots import _abs_goodness, BOUNDED_FEATURES
 
-    for attr in ["blur", "occlusion", "confidence", "score", "area_ratio"]:
+    for attr in ["blur", "vincents_artefacts", "centerness", "confidence", "score", "area_ratio"]:
         check(attr in BOUNDED_FEATURES, f"{attr} is a bounded feature")
     for attr in ["laplacian", "tenengrad", "vincent_boundary_blur_variance"]:
         check(attr not in BOUNDED_FEATURES, f"{attr} is unbounded")
@@ -1099,24 +1099,27 @@ def test_rejected_samples_export():
 def test_filter_order_cli_override():
     """--filter_order reorders the pre-filter pipeline; default is the config order."""
     import run
+    from preprocessing.variants import FilterVariant
     from config import PipelineConfig
 
     cfg = PipelineConfig()
     check(cfg.filters.filter_order == [
         "vincent_empty_mask", "vincent_border_pixel",
-        "border", "area", "confidence", "blur", "occlusion", "completeness",
+        "blur_laplacian", "blur_tenengrad", "vincents_artefacts",
     ], "default filter order is the current setup")
 
     built = run.build_filters(cfg)
-    names = [type(f).__name__ for f in built.filters]
+    inner = [f.inner if isinstance(f, FilterVariant) else f for f in built.filters]
+    names = [type(f).__name__ for f in inner]
     check(names == ["VincentEmptyMaskFilter", "VincentBorderPixelFilter",
-                    "BorderFilter", "AreaFilter", "ConfidenceFilter",
-                    "BlurFilter", "OcclusionFilter", "CompletenessFilter"],
+                    "BorderLaplacianBlurFilter", "BorderTenengradBlurFilter",
+                    "VincentsArtifactsFilter"],
           f"default pipeline built in order (got {names})")
 
-    cfg.filters.filter_order = ["blur", "area"]
+    cfg.filters.filter_order = ["blur_tenengrad", "vincents_artefacts"]
     built = run.build_filters(cfg)
-    check([type(f).__name__ for f in built.filters] == ["BlurFilter", "AreaFilter"],
+    inner = [f.inner if isinstance(f, FilterVariant) else f for f in built.filters]
+    check([type(f).__name__ for f in inner] == ["BorderTenengradBlurFilter", "VincentsArtifactsFilter"],
           "overridden order respected")
 
 

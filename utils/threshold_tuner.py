@@ -10,7 +10,10 @@ Usage:
 import numpy as np
 
 from preprocessing.area_filter import AreaFilter
-from preprocessing.blur_filter import BlurFilter
+from preprocessing.border_blur_filter import (
+    BorderLaplacianBlurFilter,
+    BorderTenengradBlurFilter,
+)
 from preprocessing.border_truncation import BorderFilter
 from preprocessing.completeness_filter import CompletenessFilter
 from preprocessing.occlusion_filter import OcclusionFilter
@@ -28,7 +31,9 @@ def compute_metric_stats(observations):
     for obs in observations:
         AreaFilter().evaluate(obs)
         BorderFilter().evaluate(obs)
-        BlurFilter().evaluate(obs)
+        # boundary-band sharpness (same band the default blur pre-filters use)
+        BorderLaplacianBlurFilter().evaluate(obs)
+        BorderTenengradBlurFilter().evaluate(obs)
         OcclusionFilter().evaluate(obs)
         CompletenessFilter().evaluate(obs)
 
@@ -65,11 +70,10 @@ DEFAULT_PERCENTILES = dict(
 SAFETY_LIMITS = dict(
     area_minimum_ratio=dict(min=0.01, max=0.05),
     border_maximum_ratio=dict(min=0.001, max=0.05),
-    laplacian_threshold=dict(min=5.0, max=200.0),
-    tenengrad_threshold=dict(min=3.0, max=60.0),
+    # boundary-band sharpness (the scale the default blur pre-filters use)
+    laplacian_threshold=dict(min=5.0, max=1000.0),
+    tenengrad_threshold=dict(min=3.0, max=100.0),
     border_edge_maximum_ratio=dict(min=0.05, max=0.5),
-    #laplacian_threshold=dict(min=30.0, max=200.0),
-    #tenengrad_threshold=dict(min=10.0, max=60.0),
     occlusion_maximum_overlap=dict(min=0.001, max=0.30),
     completeness_minimum_score=dict(min=0.50, max=0.80),
 )

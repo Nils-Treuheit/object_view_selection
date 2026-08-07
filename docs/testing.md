@@ -1,6 +1,6 @@
 ## Testing
 
-The project has **273 correctness checks** and **51 smoke tests**.
+The project has **779 correctness checks** and **55 smoke tests**.
 
 ### Correctness Tests
 
@@ -13,8 +13,8 @@ python tests/run_correctness.py
 
 Test files are in `tests/correctness_test_units/`:
 - `test_filters.py` — the classic pre-filter modules with known pass/fail cases
-- `test_vincent_filters.py` — the Vincent hard/soft pre-filters (empty mask, border pixel, area/artifacts/motion-blur soft filters) and robust population scoring
-- `test_quality.py` — quality scorer with known weights
+- `test_vincent_filters.py` — the Vincent filters (empty mask, border pixel, area/artifacts/motion-blur) and robust population scoring
+- `test_quality.py` — the 4-component quality scorer (blur, area, artifacts, centerness) with known weights
 - `test_descriptors_invariants.py` — Hu/Zernike rotation/translation/scale invariance
 - `test_descriptors_shape.py` — Fourier/Shape Context invariance and discrimination
 - `test_selection.py` — all 5 selectors produce correct output sizes and diversity

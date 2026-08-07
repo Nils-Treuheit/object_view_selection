@@ -6,7 +6,7 @@ Tests
 - VincentEmptyMaskFilter (hard)
 - VincentBorderPixelFilter (hard)
 - VincentsAreaFilter (soft)
-- VincentsArtifactsFilter (soft)
+- VincentsArtifactsFilter (score pre-filter; never hard-rejects)
 - VincentsMotionBlurFilter (soft)
 - robust population scoring helpers
 """

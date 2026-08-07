@@ -39,7 +39,8 @@ class ObservationMetrics:
     # quality metrics
     blur: float = 0.0
     area: float = 0.0
-    occlusion: float = 0.0
+    vincents_artefacts: float = 0.0
+    centerness: float = 0.0
     confidence: float = 0.0
 
     # final score

@@ -10,7 +10,10 @@ from tqdm import tqdm
 from config import PipelineConfig
 from data_io.dataset import Dataset
 from preprocessing.area_filter import AreaFilter
-from preprocessing.blur_filter import BlurFilter
+from preprocessing.border_blur_filter import (
+    BorderLaplacianBlurFilter,
+    BorderTenengradBlurFilter,
+)
 from preprocessing.border_truncation import BorderFilter
 from preprocessing.completeness_filter import CompletenessFilter
 from preprocessing.confidence import ConfidenceFilter
@@ -22,15 +25,10 @@ from preprocessing.vincents_area_filter import VincentsAreaFilter
 from preprocessing.vincents_artefacts import VincentsArtifactsFilter
 from preprocessing.vincents_motion_blur import VincentsMotionBlurFilter
 from quality.area import AreaQuality
-from quality.blur import BlurQuality
-from quality.completeness import CompletenessQuality
-from quality.occlusion import OcclusionQuality
+from quality.blur import BorderBlurQuality
+from quality.centerness import CenternessQuality
 from quality.quality_scorer import QualityScorer
-from quality.vincent import (
-    VincentsAreaQuality,
-    VincentsArtifactsQuality,
-    VincentsMotionBlurQuality,
-)
+from quality.vincent import VincentsArtifactsQuality
 
 
 def _maybe_variant(f, conf):
@@ -47,12 +45,37 @@ def build_filters(cfg: PipelineConfig, tuned=None):
     if tuned is None:
         tuned = {}
 
+    # NOTE: the default pre-filter set is deliberately small and deliberately
+    # conservative. Every default filter only removes (a) awful-quality samples
+    # below a very relaxed bare-minimum threshold and (b) extreme bad outliers
+    # relative to the population (FilterVariant: threshold_min / outlier_z).
     available = {
-        "blur": _maybe_variant(BlurFilter(
-            laplacian_threshold=tuned.get("laplacian_threshold", cfg.filters.blur.threshold),
-            tenengrad_threshold=tuned.get("tenengrad_threshold", cfg.filters.blur.tenengrad_threshold),
-            enabled=cfg.filters.blur.enabled,
-        ), cfg.filters.blur),
+        "vincent_empty_mask": VincentEmptyMaskFilter(
+            enabled=cfg.filters.vincent_empty_mask.enabled,
+        ),
+        "vincent_border_pixel": VincentBorderPixelFilter(
+            enabled=cfg.filters.vincent_border_pixel.enabled,
+        ),
+        "blur_laplacian": _maybe_variant(BorderLaplacianBlurFilter(
+            stroke_width=cfg.filters.blur_laplacian.stroke_width,
+            max_variance=cfg.filters.blur_laplacian.max_variance,
+            enabled=cfg.filters.blur_laplacian.enabled,
+        ), cfg.filters.blur_laplacian),
+        "blur_tenengrad": _maybe_variant(BorderTenengradBlurFilter(
+            stroke_width=cfg.filters.blur_tenengrad.stroke_width,
+            max_tenengrad=cfg.filters.blur_tenengrad.max_tenengrad,
+            enabled=cfg.filters.blur_tenengrad.enabled,
+        ), cfg.filters.blur_tenengrad),
+        "vincents_artefacts": _maybe_variant(VincentsArtifactsFilter(
+            kernel_size=cfg.filters.vincents_artefacts.kernel_size,
+            max_fraction=cfg.filters.vincents_artefacts.max_fraction,
+            enabled=cfg.filters.vincents_artefacts.enabled,
+        ), cfg.filters.vincents_artefacts),
+        # ------------------------------------------------------------------ #
+        # Legacy pre-filters, kept for custom --filter_order only.
+        # NOT part of the default set and NOT tested / likely not working as
+        # proper pre-filters (occlusion, completeness, area, confidence).
+        # ------------------------------------------------------------------ #
         "area": _maybe_variant(AreaFilter(
             minimum_ratio=tuned.get("area_minimum_ratio", cfg.filters.area.minimum_ratio),
             enabled=cfg.filters.area.enabled,
@@ -74,12 +97,6 @@ def build_filters(cfg: PipelineConfig, tuned=None):
             minimum_score=tuned.get("completeness_minimum_score", cfg.filters.completeness.minimum_score),
             enabled=cfg.filters.completeness.enabled,
         ), cfg.filters.completeness),
-        "vincent_empty_mask": _maybe_variant(VincentEmptyMaskFilter(
-            enabled=cfg.filters.vincent_empty_mask.enabled,
-        ), cfg.filters.vincent_empty_mask),
-        "vincent_border_pixel": _maybe_variant(VincentBorderPixelFilter(
-            enabled=cfg.filters.vincent_border_pixel.enabled,
-        ), cfg.filters.vincent_border_pixel),
     }
     filters = []
     for name in cfg.filters.filter_order:
@@ -99,19 +116,16 @@ def build_soft_filters(cfg: PipelineConfig):
 
     These never hard-reject: they compute raw per-observation stats and then a
     population pass turns those stats into robust selection weights in (0, 1].
-    Optional ``threshold_min`` / ``outlier_z`` knobs add a rejection pass on
-    the fit weights (see ``reject_soft_variants``).
+    They are kept as diagnostics only — none of them feeds the default
+    pre-filter set or the 4-component quality score. Optional
+    ``threshold_min`` / ``outlier_z`` knobs add a rejection pass on the fit
+    weights (see ``reject_soft_variants``).
     """
     return {
         "vincents_area": _soft_with_variant(VincentsAreaFilter(
             softness=cfg.filters.vincents_area.softness,
             enabled=cfg.filters.vincents_area.enabled,
         ), cfg.filters.vincents_area),
-        "vincents_artefacts": _soft_with_variant(VincentsArtifactsFilter(
-            softness=cfg.filters.vincents_artefacts.softness,
-            kernel_size=cfg.filters.vincents_artefacts.kernel_size,
-            enabled=cfg.filters.vincents_artefacts.enabled,
-        ), cfg.filters.vincents_artefacts),
         "vincents_motion_blur": _soft_with_variant(VincentsMotionBlurFilter(
             softness=cfg.filters.vincents_motion_blur.softness,
             stroke_width=cfg.filters.vincents_motion_blur.stroke_width,
@@ -140,27 +154,17 @@ def build_quality_scorer(cfg: PipelineConfig, tuned=None):
     metrics = []
     weights = {}
     anchors = cfg.quality_anchors
-    if cfg.filters.blur.enabled:
-        metrics.append(BlurQuality(max_lap=anchors.blur_max_lap))
+    # 4 quality components: border blur, mask artifact, area, centerness.
+    if cfg.filters.blur_laplacian.enabled:
+        metrics.append(BorderBlurQuality(max_variance=anchors.blur_max_variance))
         weights["blur"] = cfg.quality_weights.blur
-    if cfg.filters.area.enabled:
-        metrics.append(AreaQuality())
-        weights["area"] = cfg.quality_weights.area
-    if cfg.filters.occlusion.enabled:
-        metrics.append(OcclusionQuality())
-        weights["occlusion"] = cfg.quality_weights.occlusion
-    if cfg.filters.completeness.enabled:
-        metrics.append(CompletenessQuality())
-        weights["completeness"] = cfg.quality_weights.completeness
-    if cfg.filters.vincents_area.enabled:
-        metrics.append(VincentsAreaQuality(max_fraction=anchors.vincents_area_max_fraction))
-        weights["vincents_area"] = cfg.quality_weights.vincents_area
     if cfg.filters.vincents_artefacts.enabled:
-        metrics.append(VincentsArtifactsQuality(max_fraction=anchors.vincents_artifacts_max_fraction))
+        metrics.append(VincentsArtifactsQuality(max_fraction=anchors.artifacts_max_fraction))
         weights["vincents_artefacts"] = cfg.quality_weights.vincents_artefacts
-    if cfg.filters.vincents_motion_blur.enabled:
-        metrics.append(VincentsMotionBlurQuality(max_variance=anchors.vincents_motion_blur_max_variance))
-        weights["vincents_motion_blur"] = cfg.quality_weights.vincents_motion_blur
+    metrics.append(AreaQuality())
+    weights["area"] = cfg.quality_weights.area
+    metrics.append(CenternessQuality())
+    weights["centerness"] = cfg.quality_weights.centerness
     return QualityScorer(metrics, weights)
 
 
@@ -395,22 +399,59 @@ def save_rejected_samples(rejected, data_root, output_dir):
     return _save_samples(rejected, "rejected", data_root, output_dir)
 
 
+_REASON_SUFFIXES = ("_threshold", "_outlier")
+
+
+def _base_reason(reason):
+    """Strip the threshold/outlier suffix from a rejection reason.
+
+    ``blur_laplacian_threshold`` -> ``blur_laplacian`` so both rejection modes
+    of one filter group into the same reason folder.
+    """
+    for suffix in _REASON_SUFFIXES:
+        if reason.endswith(suffix):
+            return reason[: -len(suffix)]
+    return reason
+
+
+def _rejection_mode(reason):
+    """Map a rejection reason to its ``{threshold,outlier}-based`` subfolder.
+
+    Reasons carrying the ``_threshold`` / ``_outlier`` suffix (FilterVariant)
+    map to their mode; pure hard reasons (empty mask, border pixel) are
+    absolute structural rejects and fall under ``threshold-based``.
+    """
+    if reason.endswith("_outlier"):
+        return "outlier-based"
+    return "threshold-based"
+
+
 def save_rejected_samples_by_reason(rejected, data_root, output_dir):
     """Group rejected tuples by rejection reason into per-filter subfolders.
 
-    Writes ``rejected_samples/<reason>/<obj_id>/{rgb,mask,depth?,hand_mask?}``
-    so a run shows *why* every frame was rejected at a glance. The reason is
-    sanitised so it can never escape the ``rejected_samples`` folder.
+    Writes
+    ``rejected_samples/<reason>/threshold-based/<obj_id>/{rgb,mask,depth?,hand_mask?}``
+    and ``rejected_samples/<reason>/outlier-based/<obj_id>/...`` so a run shows
+    *why* every frame was rejected at a glance and which rejection mode
+    (relaxed absolute threshold vs extreme-bad outlier) triggered it. The
+    reason is sanitised so it can never escape the ``rejected_samples`` folder.
     """
     by_reason = {}
     for obs in rejected:
         reason = (obs.rejection_reason or "unknown").replace("/", "_")
         by_reason.setdefault(reason, []).append(obs)
+
     bases = []
+    base_root = Path(output_dir) / "rejected_samples"
     for reason in sorted(by_reason):
-        bases.append(_save_samples(by_reason[reason], "rejected", data_root, output_dir, group=reason))
+        mode = _rejection_mode(reason)
+        group = f"{_base_reason(reason)}/{mode}"
+        bases.append(_save_samples(by_reason[reason], "rejected", data_root, output_dir, group=group))
+        # ensure every reason folder has both subfolders (even when empty)
+        for other_mode in ("threshold-based", "outlier-based"):
+            (base_root / _base_reason(reason) / other_mode).mkdir(parents=True, exist_ok=True)
     if rejected:
-        print(f"Rejected samples grouped by reason saved to {Path(output_dir) / 'rejected_samples'}")
+        print(f"Rejected samples grouped by reason saved to {base_root}")
     return bases
 
 
@@ -442,10 +483,10 @@ def run_pipeline(cfg: PipelineConfig):
         print(f"  area_minimum_ratio={tuned['area_minimum_ratio']}")
         print(f"  border_maximum_ratio={tuned['border_maximum_ratio']}")
         print(f"  border_edge_maximum_ratio={tuned['border_edge_maximum_ratio']}")
-        print(f"  laplacian_threshold={tuned['laplacian_threshold']}")
-        print(f"  tenengrad_threshold={tuned['tenengrad_threshold']}")
         print(f"  occlusion_maximum_overlap={tuned['occlusion_maximum_overlap']}")
         print(f"  completeness_minimum_score={tuned['completeness_minimum_score']}")
+        print("  (default blur/artifact pre-filters use static relaxed floors +")
+        print("   population-relative outlier rejection, no tuning needed)")
 
     filter_pipeline = build_filters(cfg, tuned)
     quality_scorer = build_quality_scorer(cfg, tuned)
@@ -482,8 +523,8 @@ def run_pipeline(cfg: PipelineConfig):
         for reason, count in sorted(rejection_counts.items(), key=lambda x: -x[1]):
             print(f"    {reason}: {count}")
         if accepted:
-            raw_metrics = ["laplacian", "tenengrad", "area_ratio", "border_ratio", "edge_ratio", "hand_overlap", "completeness",
-                           "vincent_area_fraction", "vincent_artifact_fraction", "vincent_boundary_blur_variance"]
+            raw_metrics = ["laplacian", "tenengrad", "vincent_area_fraction",
+                           "vincent_artifact_fraction", "vincent_boundary_blur_variance"]
             print("  Accepted raw metrics:")
             for key in raw_metrics:
                 vals = np.array([getattr(o.metrics, key, 0) for o in accepted])
@@ -510,6 +551,7 @@ def run_pipeline(cfg: PipelineConfig):
             m = obs.metrics
             rejected_metrics_csv.append({
                 "id": obs.id,
+                "reason": obs.rejection_reason,
                 "laplacian": m.laplacian,
                 "tenengrad": m.tenengrad,
                 "area_ratio": m.area_ratio,
@@ -537,17 +579,12 @@ def run_pipeline(cfg: PipelineConfig):
         obs.metrics.confidence = min(
             obs.metrics.blur,
             obs.metrics.area,
-            obs.metrics.occlusion,
-            obs.metrics.completeness,
-            obs.metrics.vincents_area,
             obs.metrics.vincents_artefacts,
-            obs.metrics.vincents_motion_blur,
+            obs.metrics.centerness,
         )
 
     if cfg.debug:
-        quality_keys = ["blur", "area", "occlusion", "completeness",
-                        "vincents_area", "vincents_artefacts", "vincents_motion_blur",
-                        "confidence"]
+        quality_keys = ["blur", "area", "vincents_artefacts", "centerness", "confidence"]
         print("  Quality scores:")
         for key in quality_keys:
             vals = np.array([getattr(o.metrics, key, 0) for o in accepted])
@@ -625,14 +662,13 @@ def run_pipeline(cfg: PipelineConfig):
             "completeness": obs.metrics.completeness,
             "blur": obs.metrics.blur,
             "area": obs.metrics.area,
-            "occlusion": obs.metrics.occlusion,
+            "centerness": obs.metrics.centerness,
             "confidence": obs.metrics.confidence,
             "vincent_area_fraction": obs.metrics.vincent_area_fraction,
             "vincent_artifact_fraction": obs.metrics.vincent_artifact_fraction,
             "vincent_boundary_blur_variance": obs.metrics.vincent_boundary_blur_variance,
             "vincents_area": obs.metrics.vincents_area,
             "vincents_artefacts": obs.metrics.vincents_artefacts,
-            "vincents_motion_blur": obs.metrics.vincents_motion_blur,
             "selected": obs.id in selected_set,
         }
         quality_csv.append(row)
@@ -667,6 +703,7 @@ def run_pipeline(cfg: PipelineConfig):
         m = obs.metrics
         rejected_metrics_csv.append({
             "id": obs.id,
+            "reason": obs.rejection_reason,
             "laplacian": m.laplacian,
             "tenengrad": m.tenengrad,
             "area_ratio": m.area_ratio,
@@ -835,8 +872,11 @@ if __name__ == "__main__":
                              "x nearest neighbours (default: config value 3)")
     parser.add_argument("--filter_order", type=str, default=None,
                         help="Comma-separated pre-filter application order, e.g. "
-                             "'vincent_empty_mask,vincent_border_pixel,border,area,"
-                             "confidence,blur,occlusion,completeness'. "
+                             "'vincent_empty_mask,vincent_border_pixel,blur_laplacian,"
+                             "blur_tenengrad,vincents_artefacts'. "
+                             "Legacy filters available for custom orders: "
+                             "'border,area,occlusion,confidence,completeness' "
+                             "(NOT tested / likely not working as proper pre-filters). "
                              "Defaults to the config default (the current setup).")
     parser.add_argument("--use_shape_descriptors", action="store_true",
                         help="Use classical shape descriptors instead of learned embeddings")
@@ -855,7 +895,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     cfg = PipelineConfig(
-        data_root=args.data_root or "/mnt/HDD1/Project_Code/nit_object_onboarding/workspace/bottle",
+        data_root=args.data_root or "/mnt/HDD1/Project_Code/nit_object_onboarding/workspace/fmb_blocks/09_triprong",
         output_dir=args.output_dir,
         num_views=args.num_views,
         embedding=args.embedding,

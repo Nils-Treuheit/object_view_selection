@@ -49,7 +49,7 @@ def compute_boundary_blur_variance(
     """Variance of the Laplacian restricted to the boundary band.
 
     Restricting to the band straddling the mask contour, rather than the whole
-    mask or whole image, avoids background texture dominating a whole-image
+    image or whole mask, avoids background texture dominating a whole-image
     measure and a low-texture object interior diluting a whole-mask measure:
     the actual sharpness signal lives at the object/background transition.
     """
@@ -57,6 +57,23 @@ def compute_boundary_blur_variance(
     laplacian = cv2.Laplacian(image_gray, cv2.CV_64F, ksize=3)
     values = laplacian[band]
     return float(values.var()) if values.size else 0.0
+
+
+def compute_boundary_tenengrad(
+    image_gray: np.ndarray, foreground: np.ndarray, stroke_width: int
+) -> float:
+    """Mean Sobel-magnitude (Tenengrad) restricted to the boundary band.
+
+    Companion to ``compute_boundary_blur_variance``: the Laplacian variance
+    measures overall boundary sharpness while the boundary Tenengrad responds
+    to structured gradients, so the two detect complementary blur modes.
+    """
+    band = compute_boundary_band(foreground, stroke_width)
+    gx = cv2.Sobel(image_gray, cv2.CV_64F, 1, 0)
+    gy = cv2.Sobel(image_gray, cv2.CV_64F, 0, 1)
+    gradient = np.sqrt(gx ** 2 + gy ** 2)
+    values = gradient[band]
+    return float(np.mean(values)) if values.size else 0.0
 
 
 def mask_to_foreground(mask: np.ndarray) -> np.ndarray:

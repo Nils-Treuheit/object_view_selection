@@ -8,9 +8,9 @@ Dataset → Auto-Threshold → Pre-Filter → Quality Score → Embeddings → S
 
 | Stage | What it does |
 |-------|-------------|
-| **Auto-Threshold** | Computes data-driven filter thresholds from dataset statistics (percentile + safety clamp) |
-| **Pre-filter** | Rejects blurry, truncated, occluded, tiny, or incomplete observations (hard filters + population-adapted soft pass) |
-| **Quality Score** | Weighted combination of blur, area, occlusion, completeness + Vincent soft-filter weights |
+| **Auto-Threshold** | Tunes legacy filters via dataset statistics; the default blur/artifact pre-filters use static relaxed floors + population-relative outlier rejection |
+| **Pre-filter** | 5 conservative filters: empty mask, frame-touching mask, boundary-band Laplacian blur, boundary-band Tenengrad blur, mask artifacts (relaxed floor + robust outlier rejection) |
+| **Quality Score** | Weighted combination of exactly 4 components: boundary-blur, mask-area, mask-artifacts, centerness |
 | **Embeddings** | DINOv3 / DINOv2 / SigLIP / CLIP / EVA-CLIP features (or classical shape descriptors on CPU) |
 | **Selection** | Greedy quality+diversity, FPS, Facility Location, DPP, or NBV |
 
@@ -95,7 +95,7 @@ python run.py --data_root /path/to/bottle \
 
 # Custom pre-filter order (comma-separated, defaults to the config order)
 python run.py --data_root /path/to/bottle \
-  --filter_order "blur,area,border,occlusion,confidence,completeness"
+  --filter_order "vincent_empty_mask,vincent_border_pixel,blur_laplacian,blur_tenengrad,vincents_artefacts"
 
 # Disable auto-threshold tuning (use static config values instead)
 python run.py --data_root /path/to/bottle --no-auto-thresholds
@@ -153,7 +153,7 @@ See [`docs/explorer.md`](docs/explorer.md) for layout, marker legend and control
 
 | Argument | Default | Choices |
 |----------|---------|---------|
-| `--data_root` | `""` | Path to dataset |
+| `--data_root` | `<repo>/../nit_object_onboarding/workspace/fmb_blocks/09_triprong` | Path to dataset |
 | `--output_dir` | `outputs` | Output directory |
 | `--num_views` | `10` | Number of views to select |
 | `--embedding` | `auto` | `auto`, `dinov3`, `dinov2`, `siglip2`, `siglip`, `moonvit`, `clip`, `eva_clip` |
@@ -163,7 +163,7 @@ See [`docs/explorer.md`](docs/explorer.md) for layout, marker legend and control
 | `--selector_beta` | `0.40` | Diversity weight for GQD selector |
 | `--kmeans_init` | `farthest` | k-means cluster-init for `top_kmeans_xnn`: `farthest` (farthest-point seeds) or `best_quality` (top-quality seeds) |
 | `--kmeans_xnn_k` | `3` | xNN neighbourhood radius for `top_kmeans_xnn`: `3`, `5`, or `10` |
-| `--filter_order` | config default | Comma-separated pre-filter order, e.g. `vincent_empty_mask,vincent_border_pixel,border,area,confidence,blur,occlusion,completeness` |
+| `--filter_order` | config default | Comma-separated pre-filter order, e.g. `vincent_empty_mask,vincent_border_pixel,blur_laplacian,blur_tenengrad,vincents_artefacts`. Legacy filters available for custom orders: `border,area,occlusion,confidence,completeness` (not tested / likely not working as proper pre-filters) |
 | `--use_shape_descriptors` | `False` | Use classical shape descriptors (CPU) |
 | `--shape_descriptor` | `hu` | `hu`, `zernike`, `fourier`, `shape_context` |
 | `--no-auto-thresholds` | `False` | Disable data-driven threshold tuning |
@@ -194,12 +194,19 @@ outputs/
 │       └── hand_mask/
 │
 ├── rejected_samples/      # Rejected tuples grouped by rejection reason:
-│   └── <reason>/          #   e.g. blur, incomplete_shape, occlusion,
-│       └── <obj_id>/      #   small_object, vincent_border_pixel, plus the
-│           ├── rgb/       #   variant reasons <reason>_threshold / _outlier
-│           ├── mask/
-│           ├── depth/     #   only when <data_root>/depth exists
-│           └── hand_mask/ #   only when a hand mask is available
+│   └── <reason>/          #   e.g. vincent_border_pixel, blur_laplacian,
+│       ├── threshold-based/  #   <reason>_threshold variants (below the
+│       │   └── <obj_id>/     #   relaxed absolute floor)
+│       │       ├── rgb/
+│       │       ├── mask/
+│       │       ├── depth/    #   only when <data_root>/depth exists
+│       │       └── hand_mask/#   only when a hand mask is available
+│       └── outlier-based/    #   <reason>_outlier variants (extreme bad
+│           └── <obj_id>/     #   outliers relative to the population)
+│               ├── rgb/
+│               ├── mask/
+│               ├── depth/
+│               └── hand_mask/
 │
 ├── bad_examples/          # Per-stage example frames (if --plot)
 │   ├── pre-filter_stage/  # <feature>_filtered.png (reason-matched) or
@@ -257,21 +264,25 @@ outputs/
 
 All pipeline parameters are controlled via `config.py`. See [`docs/thresholds.md`](docs/thresholds.md) for the auto-tuning strategy and [`docs/pipeline.md`](docs/pipeline.md) for full module documentation.
 
-### Pre-Filtering (Vincent migration)
+### Pre-Filtering
 
-The pre-filter now includes the Vincent hard filters and a population-adapted soft pass (ported from `nit_view_selection/select_best_views.py`):
+The default pre-filter set (port from `nit_view_selection/select_best_views.py`, reworked for this pipeline) is deliberately small and conservative. The 5 default filters never hard-reject on their own; each one either has a **very relaxed absolute floor** (`threshold_min` in `config.py`) or removes **extreme bad outliers** relative to the population (`outlier_z`, fit on the accepted population via robust median/MAD statistics). Rejections are grouped under `<reason>/threshold-based/` and `<reason>/outlier-based/`.
 
-- **Hard filters** (reject): `VincentEmptyMaskFilter` (empty masks), `VincentBorderPixelFilter` (masks touching the image frame). They run first in `FilterConfig.filter_order`.
-- **Soft filters** (never reject; produce `(0, 1]` weights fit on the accepted population via robust median/MAD stats):
-  - `VincentsAreaFilter` → `vincents_area` (penalizes small masks)
-  - `VincentsArtifactsFilter` → `vincents_artefacts` (penalizes speckle/holes/ragged edges)
-  - `VincentsMotionBlurFilter` → `vincents_motion_blur` (penalizes blurred object boundaries)
+- `vincent_empty_mask` → `VincentEmptyMaskFilter` (empty masks; pure hard reject)
+- `vincent_border_pixel` → `VincentBorderPixelFilter` (masks touching the image frame; pure hard reject)
+- `blur_laplacian` → `BorderLaplacianBlurFilter` (boundary-band Laplacian variance; default floor `0.01`, `outlier_z=3.0`)
+- `blur_tenengrad` → `BorderTenengradBlurFilter` (boundary-band mean Sobel magnitude; default floor `0.10`, `outlier_z=3.0`)
+- `vincents_artefacts` → `VincentsArtifactsFilter` (mask speckle/holes/ragged edges; default floor `0.05`, `outlier_z=3.0`)
 
-Their raw stats and weights are exported to `quality.csv` (`vincent_*` / `vincents_*` columns) and fed into the quality score through `QualityWeights` (`vincents_area`, `vincents_artefacts`, `vincents_motion_blur`, default `0.10` each). Softness values (`VincentsAreaConfig`, `VincentsArtifactsConfig`, `VincentsMotionBlurConfig`) control the falloff steepness in robust-MADs.
+Their raw stats (`laplacian`, `tenengrad`, `vincent_area_fraction`, `vincent_artifact_fraction`, `vincent_boundary_blur_variance`) are exported to `quality.csv` and `rejected_metrics.csv`.
+
+The quality score combines exactly 4 components: boundary-blur (reads the `laplacian` pre-filter stat), mask-area, mask-artifacts, and centerness, weighted by `QualityWeights` (`blur` 0.30, `area` 0.20, `vincents_artefacts` 0.20, `centerness` 0.30). `confidence` is exported for diagnostics but not used by the scorer.
+
+**Legacy filters** (`area`, `border`, `occlusion`, `confidence`, `completeness`) are kept only for custom `--filter_order` runs and are NOT part of the default set — they are not tested / likely not working as proper pre-filters. Two Vincent soft filters remain available as population-adapted weights: `VincentsAreaFilter` → `vincents_area` and `VincentsMotionBlurFilter` → `vincents_motion_blur` (both never reject).
 
 ## Testing
 
-The project has **202 correctness test functions** (742 check assertions) and **51 smoke test checks** (including the Vincent hard/soft pre-filters, robust population scoring, and run.py wiring).
+The project has **223 correctness test functions** (779 check assertions) and **55 smoke test checks** (including the new pre-filters, the 4-component quality scorer, and run.py wiring).
 
 ### Correctness Tests
 
@@ -284,7 +295,7 @@ python test_correctness.py
 # or
 python tests/run_correctness.py
 
-# Expected output: Results: 202 passed, 0 failed out of 202
+# Expected output: Results: 223 passed, 0 failed out of 223
 ```
 
 ### Smoke Tests
@@ -296,7 +307,7 @@ python test_smoke.py --data_root /path/to/bottle
 # or
 python tests/run_smoke.py --data_root /path/to/bottle
 
-# Expected output: Results: 51 passed, 0 failed out of 51
+# Expected output: Results: 55 passed, 0 failed out of 55
 ```
 
 All suites must pass with **0 failures** before changes are considered complete.
@@ -316,29 +327,27 @@ object_view_selection/
 ├── preprocessing/
 │   ├── base.py               # Abstract BaseFilter
 │   ├── filter_pipeline.py    # Chains filters, rejects on first failure
-│   ├── blur_filter.py        # Laplace + Tenengrad sharpness
-│   ├── area_filter.py        # Min object size
-│   ├── border_truncation.py  # Edge-touching detection
-│   ├── occlusion_filter.py   # Hand/mask overlap
-│   ├── confidence.py         # Detector confidence gate (disabled by default)
-│   ├── completeness_filter.py# Solidity, extent, convexity
+│   ├── variants.py           # FilterVariant: relaxed floor + robust-outlier rejection
+│   ├── border_blur_filter.py # Default: boundary-band Laplacian + Tenengrad blur pre-filters
+│   ├── vincents_artefacts.py # Default: mask artifact score pre-filter (never hard-rejects)
 │   ├── vincent_utils.py      # Vincent helpers (boundary band, artifacts, robust scoring)
 │   ├── vincent_empty_mask.py # Hard: reject empty masks
 │   ├── vincent_border_pixel.py  # Hard: reject masks touching the frame
 │   ├── vincents_base.py      # Abstract VincentSoftFilter (population-adapted)
 │   ├── vincents_area_filter.py   # Soft: mask area weight
-│   ├── vincents_artefacts.py     # Soft: mask artifact weight
-│   └── vincents_motion_blur.py   # Soft: boundary-blur weight
+│   ├── vincents_motion_blur.py   # Soft: boundary-blur weight
+│   └── (legacy, custom orders only) blur_filter.py, area_filter.py,
+│       border_truncation.py, occlusion_filter.py, confidence.py,
+│       completeness_filter.py
 │
 ├── quality/
 │   ├── base.py               # Abstract QualityMetric
 │   ├── quality_scorer.py     # Weighted sum scorer
-│   ├── blur.py               # BlurQuality (normalized by 2× threshold)
+│   ├── blur.py               # BorderBlurQuality (boundary-band Laplacian, self-contained fallback)
 │   ├── area.py               # AreaQuality (ratio up to 20%)
-│   ├── occlusion.py          # OcclusionQuality (1 - overlap)
-│   ├── completeness.py       # CompletenessQuality (pass-through)
-│   ├── confidence.py         # ConfidenceQuality (pass-through, unused by scorer)
-│   └── vincent.py            # VincentsArea/Artifacts/MotionBlurQuality (pass-through)
+│   ├── centerness.py         # CenternessQuality (mask centredness)
+│   ├── vincent.py            # VincentsArtifactsQuality (pass-through of artifact fraction)
+│   └── (legacy, unused by scorer) occlusion.py, completeness.py, confidence.py
 │
 ├── embeddings/
 │   ├── base.py               # Abstract EmbeddingModel (+ optional RGBA alpha flag)
@@ -387,8 +396,8 @@ object_view_selection/
 │   ├── run_smoke.py          # Smoke test runner
 │   ├── test_utils.py         # Shared helpers (make_circle_mask, make_flower, check)
 │   ├── smoke_test_utils.py   # Smoke test helpers
-│   ├── correctness_test_units/  # Test modules (273 checks)
-│   └── smoke_test_units/        # Smoke test modules (51 checks)
+│   ├── correctness_test_units/  # Test modules (779 checks)
+│   └── smoke_test_units/        # Smoke test modules (55 checks)
 │
 ├── embedding_explorer_tool/  # Interactive kMeans + xNN explorer
 │   ├── algorithms.py         # Snapshot loading, seeds, k-means, xNN, MDS, overlay, text

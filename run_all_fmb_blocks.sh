@@ -14,9 +14,6 @@ PATHS=(
     "/mnt/HDD1/Project_Code/nit_object_onboarding/workspace/fmb_blocks/07_twin_square"
     "/mnt/HDD1/Project_Code/nit_object_onboarding/workspace/fmb_blocks/08_round_square"
     "/mnt/HDD1/Project_Code/nit_object_onboarding/workspace/fmb_blocks/09_triprong"
-    "/mnt/HDD1/Project_Code/nit_object_onboarding/workspace/09_triprong_old"
-    "/mnt/HDD1/Project_Code/nit_object_onboarding/workspace/nit_cube"
-    "/mnt/HDD1/Project_Code/nit_object_onboarding/workspace/bottle"
 )
 
 # Loop over each path

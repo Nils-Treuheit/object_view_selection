@@ -91,7 +91,9 @@ GOOD_RELATIVE_LABEL = ""
 
 # Rejection reasons → histogram colors. "border" is the truncation filter
 # (object cut off at the frame edge) and "occlusion" is hand / other-object
-# coverage; both are kept as distinct categories everywhere.
+# coverage; both are kept as distinct categories everywhere. The default
+# blur/artifact filters reject below a relaxed absolute floor ("_threshold")
+# or as extreme bad outliers ("_outlier") — both modes share one color.
 REJECT_COLORS = {
     "vincent_empty_mask": "dimgray",
     "vincent_border_pixel": "tab:purple",
@@ -102,6 +104,15 @@ REJECT_COLORS = {
     "low_confidence": "tab:green",
     "confidence": "tab:green",
     "blur": "tab:brown",
+    "blur_laplacian": "tab:brown",
+    "blur_laplacian_threshold": "tab:brown",
+    "blur_laplacian_outlier": "tab:brown",
+    "blur_tenengrad": "goldenrod",
+    "blur_tenengrad_threshold": "goldenrod",
+    "blur_tenengrad_outlier": "goldenrod",
+    "vincents_artefacts": "tab:olive",
+    "vincents_artefacts_threshold": "tab:olive",
+    "vincents_artefacts_outlier": "tab:olive",
     "occlusion": "tab:pink",
     "motion_blur": "tab:red",
     "completeness": "tab:cyan",
@@ -130,10 +141,8 @@ RAW_FEATURES = [
 QUALITY_FEATURES = [
     ("blur", "Blur Quality", 1),
     ("area", "Area Quality", 1),
-    ("occlusion", "Occlusion Quality", 1),
-    ("vincents_area", "Vincent Area Quality", 1),
-    ("vincents_artefacts", "Vincent Artifacts Quality", 1),
-    ("vincents_motion_blur", "Vincent Motion Blur Quality", 1),
+    ("vincents_artefacts", "Artifacts Quality", 1),
+    ("centerness", "Centerness Quality", 1),
     ("confidence", "Confidence", 1),
     ("score", "Final Quality", 1),
 ]
@@ -160,19 +169,16 @@ FIXED_HIST_XLIM = (-0.05, 1.05)
 BOUNDED_FEATURES = {
     "area_ratio", "border_ratio", "edge_ratio", "hand_overlap",
     "completeness", "vincent_area_fraction", "vincent_artifact_fraction",
-    "blur", "area", "occlusion", "vincents_area", "vincents_artefacts",
-    "vincents_motion_blur", "confidence", "score",
+    "blur", "area", "vincents_artefacts", "centerness",
+    "confidence", "score",
 }
 
 # Overlay dispatch: which raw stat a quality feature maps to for highlighting.
 _QUALITY_TO_RAW = {
     "blur": "laplacian",
     "area": "area_ratio",
-    "occlusion": "hand_overlap",
-    "completeness": "completeness",
-    "vincents_area": "vincent_area_fraction",
     "vincents_artefacts": "vincent_artifact_fraction",
-    "vincents_motion_blur": "vincent_boundary_blur_variance",
+    "centerness": "area_ratio",
     "confidence": "score",
     "score": "score",
 }
@@ -200,15 +206,15 @@ _FEATURE_DIRECTION = {attr: gd for attr, _, gd in RAW_FEATURES + QUALITY_FEATURE
 # never hard-rejects and always falls back to the prob-sampled
 # ``lower_<attr>_quality.png`` form.
 _FEATURE_REASONS = {
-    "laplacian": ("blur",),
-    "tenengrad": ("blur",),
+    "laplacian": ("blur_laplacian_threshold", "blur_laplacian_outlier", "blur",),
+    "tenengrad": ("blur_tenengrad_threshold", "blur_tenengrad_outlier", "blur",),
     "area_ratio": ("small_object",),
     "border_ratio": ("border", "truncation", "vincent_border_pixel"),
     "edge_ratio": ("border", "truncation", "vincent_border_pixel"),
     "hand_overlap": ("occlusion",),
     "completeness": ("incomplete_shape", "completeness"),
     "vincent_area_fraction": ("vincent_empty_mask", "empty_mask"),
-    "vincent_artifact_fraction": (),
+    "vincent_artifact_fraction": ("vincents_artefacts_threshold", "vincents_artefacts_outlier"),
     "vincent_boundary_blur_variance": (),
 }
 

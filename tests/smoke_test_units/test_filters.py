@@ -5,21 +5,32 @@ Smoke tests for preprocessing filters.
 from tests.smoke_test_utils import check
 
 
-DATA_ROOT = "/mnt/HDD1/Project_Code/nit_object_onboarding/workspace/bottle"
+DATA_ROOT = "/mnt/HDD1/Project_Code/nit_object_onboarding/workspace/fmb_blocks/09_triprong"
 
 
 def test_filter_basics(ds):
     obs = ds.observations[0]
 
-    from preprocessing.blur_filter import BlurFilter
-    bf = BlurFilter(laplacian_threshold=120, tenengrad_threshold=35, enabled=True)
+    from preprocessing.border_blur_filter import BorderLaplacianBlurFilter
+    bf = BorderLaplacianBlurFilter(enabled=True)
     score, passed, reason = bf.evaluate(obs)
-    check(isinstance(score, float), f"Blur score={score:.4f}")
+    check(isinstance(score, float), f"BorderLaplacian score={score:.4f}")
     check(obs.metrics.laplacian > 0, f"  Laplacian={obs.metrics.laplacian:.2f}")
 
-    from preprocessing.area_filter import AreaFilter
-    af = AreaFilter(minimum_ratio=0.02, enabled=True)
+    from preprocessing.border_blur_filter import BorderTenengradBlurFilter
+    tf = BorderTenengradBlurFilter(enabled=True)
+    score, passed, reason = tf.evaluate(obs)
+    check(isinstance(score, float), f"BorderTenengrad score={score:.4f}")
+    check(obs.metrics.tenengrad > 0, f"  Tenengrad={obs.metrics.tenengrad:.2f}")
+
+    from preprocessing.vincents_artefacts import VincentsArtifactsFilter
+    af = VincentsArtifactsFilter(enabled=True)
     score, passed, reason = af.evaluate(obs)
+    check(isinstance(score, float), f"Artifacts score={score:.4f}")
+
+    from preprocessing.area_filter import AreaFilter
+    ar = AreaFilter(minimum_ratio=0.02, enabled=True)
+    score, passed, reason = ar.evaluate(obs)
     check(isinstance(score, float), f"Area score={score:.4f}")
 
     from preprocessing.border_truncation import BorderFilter
@@ -38,7 +49,7 @@ def test_filter_basics(ds):
     check(isinstance(score, float), f"Completeness score={score:.4f}")
 
     from preprocessing.filter_pipeline import FilterPipeline
-    pipeline = FilterPipeline([BlurFilter(), AreaFilter(), BorderFilter(), OcclusionFilter()])
+    pipeline = FilterPipeline([bf, tf, af])
     obs.rejected = False
     obs.rejection_reason = None
     result = pipeline.run(obs)
@@ -62,6 +73,13 @@ def test_filter_rejection(ds):
     bad2.mask[:, :] = 255
     s, p, r = btf.evaluate(bad2)
     check(not p and r == "border", f"Border rejects truncated: {r}")
+
+    from preprocessing.vincent_empty_mask import VincentEmptyMaskFilter
+    vf = VincentEmptyMaskFilter()
+    bad3 = ds.observations[0]
+    bad3.mask = np.zeros_like(bad3.mask)
+    s, p, r = vf.evaluate(bad3)
+    check(not p and r == "vincent_empty_mask", f"Empty-mask filter rejects: {r}")
 
 
 FILTER_TESTS = [

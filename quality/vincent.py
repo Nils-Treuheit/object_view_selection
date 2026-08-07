@@ -24,8 +24,8 @@ class VincentsArtifactsQuality(QualityMetric):
     """Global mask-artifact quality from the raw artifact fraction.
 
     Artifact fraction = (open(mask) XOR close(mask)) / mask_pixels, computed
-    by the soft pre-filter. Anchored at a fixed global max fraction; a mask
-    whose artifact fraction reaches the anchor scores 0.
+    by the ``VincentsArtifactsFilter`` pre-filter. Anchored at a fixed global
+    max fraction; a mask whose artifact fraction reaches the anchor scores 0.
     """
 
     name = "vincents_artefacts"

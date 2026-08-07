@@ -4,11 +4,11 @@ Smoke tests for utility modules.
 
 import numpy as np
 
-from tests.smoke_test_utils import check
+from tests.smoke_test_utils import check, first_usable_observation
 
 
 def test_utils(ds):
-    obs = ds.observations[0]
+    obs = first_usable_observation(ds)
 
     from utils.geometry import contour_area, bounding_box, mask_centroid
     check(contour_area(obs.mask) > 0, "Contour area")

@@ -48,7 +48,7 @@ def run_tests_in_module(module_name, ds=None):
 def main():
     parser = argparse.ArgumentParser(description="Run smoke tests")
     parser.add_argument("--data_root", type=str,
-                        default="/mnt/HDD1/Project_Code/nit_object_onboarding/workspace/bottle")
+                        default="/mnt/HDD1/Project_Code/nit_object_onboarding/workspace/fmb_blocks/09_triprong")
     args = parser.parse_args()
 
     from tests.smoke_test_utils import reset_results, get_results

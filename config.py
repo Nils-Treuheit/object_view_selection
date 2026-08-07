@@ -2,18 +2,39 @@ from dataclasses import dataclass, field
 
 
 @dataclass
-class BlurConfig:
+class LaplacianBlurConfig:
+    """Boundary-band Laplacian-variance pre-filter (blur_laplacian).
+
+    ``max_variance`` anchors the (0, 1] goodness score of the filter;
+    ``threshold_min`` is the very relaxed absolute floor (below = awful
+    quality) and ``outlier_z`` removes extreme bad outliers relative to the
+    population (see preprocessing/variants.py).
+    """
     enabled: bool = True
-    threshold: float = 120.0
-    tenengrad_threshold: float = 35.0
-    # threshold/outlier variants: absolute very-low-quality score cutoff and
-    # robust extreme-bad-outlier removal (see preprocessing/variants.py).
-    threshold_min: float | None = None
-    outlier_z: float | None = None
+    stroke_width: int = 9
+    max_variance: float = 10000.0
+    threshold_min: float = 0.01
+    outlier_z: float = 3.0
+
+
+@dataclass
+class TenengradBlurConfig:
+    """Boundary-band Tenengrad pre-filter (blur_tenengrad).
+
+    Same rejection knobs as ``LaplacianBlurConfig``, on the mean Sobel
+    magnitude restricted to the mask boundary band.
+    """
+    enabled: bool = True
+    stroke_width: int = 9
+    max_tenengrad: float = 100.0
+    threshold_min: float = 0.10
+    outlier_z: float = 3.0
 
 
 @dataclass
 class AreaConfig:
+    # NOT part of the default pre-filter set and not tested / likely not
+    # working as a proper pre-filter. Kept only for custom --filter_order.
     enabled: bool = True
     minimum_ratio: float = 0.01
     threshold_min: float | None = None
@@ -22,6 +43,8 @@ class AreaConfig:
 
 @dataclass
 class BorderConfig:
+    # NOT part of the default pre-filter set and not tested / likely not
+    # working as a proper pre-filter. Kept only for custom --filter_order.
     enabled: bool = True
     maximum_ratio: float = 0.05
     edge_maximum_ratio: float = 0.25
@@ -31,6 +54,8 @@ class BorderConfig:
 
 @dataclass
 class OcclusionConfig:
+    # NOT part of the default pre-filter set and not tested / likely not
+    # working as a proper pre-filter. Kept only for custom --filter_order.
     enabled: bool = True
     maximum_overlap: float = 0.15
     threshold_min: float | None = None
@@ -39,6 +64,8 @@ class OcclusionConfig:
 
 @dataclass
 class ConfidenceConfig:
+    # NOT part of the default pre-filter set and not tested / likely not
+    # working as a proper pre-filter. Kept only for custom --filter_order.
     enabled: bool = False
     minimum_confidence: float = 0.5
     threshold_min: float | None = None
@@ -47,6 +74,8 @@ class ConfidenceConfig:
 
 @dataclass
 class CompletenessConfig:
+    # NOT part of the default pre-filter set and not tested / likely not
+    # working as a proper pre-filter. Kept only for custom --filter_order.
     enabled: bool = True
     minimum_score: float = 0.65
     threshold_min: float | None = None
@@ -79,10 +108,12 @@ class VincentsAreaConfig:
 @dataclass
 class VincentsArtifactsConfig:
     enabled: bool = True
-    softness: float = 3.0
     kernel_size: int = 3
-    threshold_min: float | None = None
-    outlier_z: float | None = None
+    # artifact fraction at which the filter's goodness score hits 0.0
+    max_fraction: float = 0.05
+    # very relaxed absolute floor and extreme-bad-outlier removal on the score
+    threshold_min: float = 0.05
+    outlier_z: float = 3.0
 
 
 @dataclass
@@ -102,7 +133,8 @@ class VincentsMotionBlurConfig:
 
 @dataclass
 class FilterConfig:
-    blur: BlurConfig = field(default_factory=BlurConfig)
+    blur_laplacian: LaplacianBlurConfig = field(default_factory=LaplacianBlurConfig)
+    blur_tenengrad: TenengradBlurConfig = field(default_factory=TenengradBlurConfig)
     area: AreaConfig = field(default_factory=AreaConfig)
     border: BorderConfig = field(default_factory=BorderConfig)
     occlusion: OcclusionConfig = field(default_factory=OcclusionConfig)
@@ -115,20 +147,17 @@ class FilterConfig:
     vincents_motion_blur: VincentsMotionBlurConfig = field(default_factory=VincentsMotionBlurConfig)
     filter_order: list = field(default_factory=lambda: [
         "vincent_empty_mask", "vincent_border_pixel",
-        "border", "area", "confidence", "blur", "occlusion", "completeness"
+        "blur_laplacian", "blur_tenengrad", "vincents_artefacts"
     ])
 
 
 @dataclass
 class QualityWeights:
-    blur: float = 0.20
-    area: float = 0.15
-    occlusion: float = 0.20
-    confidence: float = 0.10
-    completeness: float = 0.35
-    vincents_area: float = 0.10
-    vincents_artefacts: float = 0.10
-    vincents_motion_blur: float = 0.10
+    """Weights of the 4 quality components (weighted average)."""
+    blur: float = 0.30
+    area: float = 0.20
+    vincents_artefacts: float = 0.20
+    centerness: float = 0.30
 
 
 @dataclass
@@ -140,10 +169,9 @@ class QualityAnchors:
     across datasets.
     """
 
-    blur_max_lap: float = 400.0
-    vincents_area_max_fraction: float = 0.20
-    vincents_artifacts_max_fraction: float = 0.05
-    vincents_motion_blur_max_variance: float = 10000.0
+    blur_max_variance: float = 10000.0
+    area_max_fraction: float = 0.20
+    artifacts_max_fraction: float = 0.05
 
 
 @dataclass

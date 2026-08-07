@@ -140,23 +140,13 @@ def test_quality_scorer_uses_global_anchors():
 
     blur_metric = next(m for m in scorer.metrics if m.name == "blur")
     check(
-        blur_metric.max_lap == cfg.quality_anchors.blur_max_lap,
-        f"BlurQuality anchored at fixed max_lap={cfg.quality_anchors.blur_max_lap}",
-    )
-    area_metric = next(m for m in scorer.metrics if m.name == "vincents_area")
-    check(
-        area_metric.max_fraction == cfg.quality_anchors.vincents_area_max_fraction,
-        "VincentsAreaQuality anchored at fixed max fraction",
+        blur_metric.max_variance == cfg.quality_anchors.blur_max_variance,
+        f"BorderBlurQuality anchored at fixed max_variance={cfg.quality_anchors.blur_max_variance}",
     )
     artifact_metric = next(m for m in scorer.metrics if m.name == "vincents_artefacts")
     check(
-        artifact_metric.max_fraction == cfg.quality_anchors.vincents_artifacts_max_fraction,
+        artifact_metric.max_fraction == cfg.quality_anchors.artifacts_max_fraction,
         "VincentsArtifactsQuality anchored at fixed max fraction",
-    )
-    blur2_metric = next(m for m in scorer.metrics if m.name == "vincents_motion_blur")
-    check(
-        blur2_metric.max_variance == cfg.quality_anchors.vincents_motion_blur_max_variance,
-        "VincentsMotionBlurQuality anchored at fixed max variance",
     )
 
 

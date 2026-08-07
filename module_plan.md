@@ -263,6 +263,8 @@ Supports:
 
 Estimates visible object fraction.
 
+> Legacy / not part of the default pipeline (custom `--filter_order` only).
+
 Possible implementations:
 
 - hand overlap
@@ -276,6 +278,8 @@ Possible implementations:
 ## completeness.py
 
 Measures shape completeness.
+
+> Legacy / not part of the default pipeline (custom `--filter_order` only).
 
 Possible metrics:
 
@@ -318,13 +322,12 @@ Responsible for ranking observations.
 
 ## metrics.py
 
-Computes normalized quality metrics:
+Computes normalized quality metrics (the default scorer uses exactly these four):
 
-- Blur
+- Blur (boundary band)
 - Area
-- Confidence
-- Occlusion
-- Completeness
+- Vincents artifacts
+- Centerness
 
 Each metric is normalized to
 
@@ -342,9 +345,8 @@ Computes
 Q =
 w_blur * blur
 + w_area * area
-+ w_confidence * confidence
-+ w_occlusion * occlusion
-+ w_completeness * completeness
++ w_vincents_artefacts * vincents_artefacts
++ w_centerness * centerness
 ```
 
 Higher values indicate better observations.
@@ -557,11 +559,13 @@ Example:
 PipelineConfig(
 
     filters=FilterConfig(
-        blur=True,
-        truncation=True,
-        area=True,
-        occlusion=True,
-        confidence=False
+        vincent_empty_mask=True,
+        vincent_border_pixel=True,
+        blur_laplacian=True,
+        blur_tenengrad=True,
+        vincents_artefacts=True,
+        # legacy, custom orders only: area, border, occlusion, confidence,
+        # completeness
     ),
 
     embedding="dinov2",
@@ -573,9 +577,8 @@ PipelineConfig(
     quality_weights=dict(
         blur=0.30,
         area=0.20,
-        confidence=0.10,
-        occlusion=0.20,
-        completeness=0.20,
+        vincents_artefacts=0.20,
+        centerness=0.30,
     )
 )
 ```
@@ -630,12 +633,19 @@ outputs/
 │       └── hand_mask/
 │
 ├── rejected_samples/        # grouped by rejection reason:
-│   └── <reason>/            #   e.g. blur, incomplete_shape, occlusion,
-│       └── <obj_id>/        #   small_object, vincent_border_pixel, plus the
-│           ├── rgb/         #   variant reasons <reason>_threshold / _outlier
-│           ├── mask/
-│           ├── depth/
-│           └── hand_mask/
+│   └── <reason>/            #   e.g. vincent_border_pixel, blur_laplacian,
+│       ├── threshold-based/ #   <reason>_threshold variants (below the
+│       │   └── <obj_id>/    #   relaxed absolute floor; pure hard reasons too)
+│       │       ├── rgb/
+│       │       ├── mask/
+│       │       ├── depth/
+│       │       └── hand_mask/
+│       └── outlier-based/   #   <reason>_outlier variants (extreme bad
+│           └── <obj_id>/    #   outliers relative to the population)
+│               ├── rgb/
+│               ├── mask/
+│               ├── depth/
+│               └── hand_mask/
 │
 ├── report.json
 │

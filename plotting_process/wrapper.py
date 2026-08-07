@@ -25,7 +25,7 @@ _CRITERIA_COLUMNS = [
     "vincent_area_fraction", "vincent_artifact_fraction",
     "vincent_boundary_blur_variance",
     "solidity", "extent", "convexity", "completeness",
-    "blur", "area", "occlusion", "confidence",
+    "blur", "area", "vincents_artefacts", "centerness", "confidence",
 ]
 
 

@@ -141,15 +141,14 @@ def _plot_violin_set_scaled(
 
 
 def plot_quality_violins(accepted, rejected, selected, output_dir_pre, output_dir_sel, single_set_plots=True):
-    score_keys = ["blur", "area", "occlusion",
-                  "vincents_area", "vincents_artefacts", "vincents_motion_blur",
-                  "completeness", "confidence", "score"]
+    score_keys = ["blur", "area", "vincents_artefacts", "centerness",
+                  "confidence", "score"]
     palette = {"selected": "#e76f51", "non-selected": "#264653"}
 
     selected_ids = {s.id for s in selected}
     non_sel = [o for o in accepted if o.id not in selected_ids]
 
-    sep_idx = 6
+    sep_idx = 4
 
     df_ns = _build_df(non_sel, score_keys, "non-selected")
     df_sel = _build_df(selected, score_keys, "selected")

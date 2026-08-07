@@ -5,23 +5,25 @@ from matplotlib import pyplot as plt
 
 # (metric attr, readable label, binary flag)
 RAW_STATS = [
-    ("laplacian", "Laplacian", False),
-    ("tenengrad", "Tenengrad", False),
+    ("laplacian", "Boundary Laplacian Variance", False),
+    ("tenengrad", "Boundary Tenengrad", False),
+    ("vincent_artifact_fraction", "Artifact Fraction", False),
+    ("vincent_boundary_blur_variance", "Boundary Blur Variance", False),
+    ("vincent_area_fraction", "Mask Area Fraction", False),
+    ("vincent_touches_border", "Touches Border (hard)", True),
+    ("vincent_pixel_count", "Mask Pixel Count", False),
     ("area_ratio", "Area Ratio", False),
     ("border_ratio", "Border Ratio", False),
     ("edge_ratio", "Edge Ratio", False),
     ("hand_overlap", "Hand Overlap", False),
     ("completeness", "Completeness", False),
-    ("vincent_pixel_count", "Mask Pixel Count", False),
-    ("vincent_touches_border", "Touches Border (hard)", True),
-    ("vincent_area_fraction", "Mask Area Fraction", False),
-    ("vincent_artifact_fraction", "Artifact Fraction", False),
-    ("vincent_boundary_blur_variance", "Boundary Blur Variance", False),
 ]
 
+# population-adjusted scores in (0, 1] over the accepted population:
+# the two remaining soft pre-filter weights and the artifact score.
 WEIGHTS = [
     ("vincents_area", "Mask Area Weight"),
-    ("vincents_artefacts", "Artifacts Weight"),
+    ("vincents_artefacts", "Artifacts Score"),
     ("vincents_motion_blur", "Motion Blur Weight"),
 ]
 
@@ -86,7 +88,7 @@ def plot_pre_filter_distributions(accepted, rejected, output_dir_pre):
         ax.set_title(label, fontsize=9)
         ax.set_xlim(0, 1.05)
         ax.tick_params(labelsize=7)
-    fig.suptitle("Soft Pre-Filter Population Weights (accepted)", fontsize=13)
+    fig.suptitle("Population-Adjusted Scores (accepted)", fontsize=13)
     fig.tight_layout(rect=(0, 0, 1, 0.9))
     path = output_dir_pre / "pre_filter_soft_weights.png"
     fig.savefig(path, dpi=150)

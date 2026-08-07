@@ -7,7 +7,8 @@ Tests:
 - score assignment
 - metric weighting
 - blur degradation
-- occlusion degradation
+- centerness degradation
+- mask-artifact degradation
 - area degradation
 - deterministic behaviour
 - monotonic quality response
@@ -22,6 +23,7 @@ from pathlib import Path
 from tests.test_utils import (
     check,
     make_image,
+    make_circle_mask,
     full_mask,
 )
 
@@ -42,13 +44,18 @@ def make_observation(
 
     from data_io.observation import Observation
 
-    if image is None:
-        image = make_image()
-
     if mask is None:
+        if image is None:
+            image = make_image()
         mask = full_mask(
             image.shape[0],
             image.shape[1],
+        )
+
+    if image is None:
+        image = make_image(
+            mask.shape[0],
+            mask.shape[1],
         )
 
     return Observation(
@@ -68,20 +75,23 @@ def make_scorer():
     """
 
     from quality.quality_scorer import QualityScorer
-    from quality.blur import BlurQuality
+    from quality.blur import BorderBlurQuality
     from quality.area import AreaQuality
-    from quality.occlusion import OcclusionQuality
+    from quality.vincent import VincentsArtifactsQuality
+    from quality.centerness import CenternessQuality
 
     return QualityScorer(
         metrics=[
-            BlurQuality(),
+            BorderBlurQuality(),
             AreaQuality(),
-            OcclusionQuality(),
+            VincentsArtifactsQuality(),
+            CenternessQuality(),
         ],
         weights={
-            "blur": 0.5,
-            "area": 0.3,
-            "occlusion": 0.2,
+            "blur": 0.3,
+            "area": 0.2,
+            "vincents_artefacts": 0.2,
+            "centerness": 0.3,
         },
     )
 
@@ -143,9 +153,15 @@ def test_perfect_observation_scores_high():
 
     scorer = make_scorer()
 
+    # centered circle with a healthy border gap: sharp, right-sized,
+    # artifact-free, centered
+    mask = np.zeros((200, 200), dtype=np.uint8)
+    yy, xx = np.ogrid[:200, :200]
+    mask[(xx - 100) ** 2 + (yy - 100) ** 2 < 40 ** 2] = 255
+
     obs = make_observation(
         image=make_image(),
-        mask=full_mask(),
+        mask=mask,
     )
 
     q = scorer.score(obs)
@@ -168,13 +184,23 @@ def test_blur_reduces_quality():
         10,
     )
 
+    # circle mask so the boundary band is non-empty (a full-canvas mask has an
+    # empty band and both frames would score blur 0)
+    mask = make_circle_mask(
+        200,
+        200,
+        radius=60,
+    )
+
     obs_sharp = make_observation(
         image=sharp,
+        mask=mask,
         obs_id=0,
     )
 
     obs_blurry = make_observation(
         image=blurry,
+        mask=mask,
         obs_id=1,
     )
 
@@ -190,46 +216,91 @@ def test_blur_reduces_quality():
     )
 
 
-def test_occlusion_reduces_quality():
+def test_centerness_reduces_quality():
 
     scorer = make_scorer()
 
-    mask = full_mask()
+    centered = make_circle_mask(
+        200,
+        200,
+        radius=30,
+    )
 
-    clean = make_observation(
-        mask=mask,
-        object_hand=None,
+    cornered = make_circle_mask(
+        200,
+        200,
+        radius=30,
+        center=(20, 20),
+    )
+
+    obs_centered = make_observation(
+        mask=centered,
         obs_id=0,
     )
 
-    hand = np.zeros(
-        mask.shape,
-        dtype=np.uint8,
-    )
-
-    hand[:, :50] = 255
-
-    occluded = make_observation(
-        mask=mask,
-        object_hand=hand,
+    obs_cornered = make_observation(
+        mask=cornered,
         obs_id=1,
     )
 
-    q_clean = scorer.score(clean)
-    q_occluded = scorer.score(occluded)
+    q_centered = scorer.score(obs_centered)
+    q_cornered = scorer.score(obs_cornered)
 
     check(
-        q_occluded < q_clean,
+        q_cornered < q_centered,
         (
-            f"Occlusion lowers quality "
-            f"({q_clean:.4f} -> {q_occluded:.4f})"
+            f"Off-center object lowers quality "
+            f"({q_centered:.4f} -> {q_cornered:.4f})"
+        ),
+    )
+
+
+def test_mask_artifacts_reduce_quality():
+
+    scorer = make_scorer()
+
+    clean = make_circle_mask(
+        200,
+        200,
+        radius=60,
+    )
+
+    rng = np.random.RandomState(0)
+    noisy = clean.copy()
+    noise = (rng.rand(200, 200) < 0.01).astype(np.uint8) * 255
+    noisy[noise > 0] = 255
+
+    obs_clean = make_observation(
+        mask=clean,
+        obs_id=0,
+    )
+
+    obs_noisy = make_observation(
+        mask=noisy,
+        obs_id=1,
+    )
+
+    q_clean = scorer.score(obs_clean)
+    q_noisy = scorer.score(obs_noisy)
+
+    check(
+        q_noisy < q_clean,
+        (
+            f"Mask artifacts lower quality "
+            f"({q_clean:.4f} -> {q_noisy:.4f})"
         ),
     )
 
 
 def test_small_area_reduces_quality():
 
-    scorer = make_scorer()
+    from quality.quality_scorer import QualityScorer
+    from quality.area import AreaQuality
+
+    area_scorer = QualityScorer(
+        metrics=[AreaQuality()],
+        weights={"area": 1.0},
+    )
 
     large_mask = full_mask()
 
@@ -253,8 +324,8 @@ def test_small_area_reduces_quality():
         obs_id=1,
     )
 
-    q_large = scorer.score(large)
-    q_small = scorer.score(small)
+    q_large = area_scorer.score(large)
+    q_small = area_scorer.score(small)
 
     check(
         q_small < q_large,
@@ -338,8 +409,13 @@ QUALITY_TESTS = [
     ),
 
     (
-        "Occlusion degradation",
-        test_occlusion_reduces_quality,
+        "Centerness degradation",
+        test_centerness_reduces_quality,
+    ),
+
+    (
+        "Mask artifacts degradation",
+        test_mask_artifacts_reduce_quality,
     ),
 
     (
