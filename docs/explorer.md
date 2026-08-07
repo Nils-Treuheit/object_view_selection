@@ -36,6 +36,31 @@ stages as `run.py`, writes the snapshot into `--output_dir`, and only then
 launches. That means you can point the tool at a dataset that was never
 pipelined and explore it immediately.
 
+## Output structure (snapshot directory)
+
+The tool operates on a **snapshot directory** — a pipeline `--output_dir`. It
+reads the files below and, when generating a fresh snapshot, writes them too:
+
+```
+outputs_embedding_explorer/
+├── embeddings.npy           # (N, D) embedding matrix, aligned to the pool ids
+├── selection_pool_ids.npy   # (N,) int frame ids; pool_ids[i] <-> embeddings[i]
+├── quality.csv              # id + quality per pool row (same alignment)
+├── report.json              # {"data_root", "embedding", "embedding_model"}
+└── selected_indices.npy     # optional: run.py's selected indices into embeddings.npy
+```
+
+- **Row alignment** is the contract: `embeddings[i]`, `pool_ids[i]` and
+  `quality[i]` all refer to the same observation.
+- **Selected views** — when a pipeline run wrote `selected_indices.npy`, the
+  tool loads it to mark the run's `top_kmeans_xnn` picks; it is not required
+  for the explorer to work.
+- **`data_root`** defaults to the value stored in `report.json`; it is only
+  needed explicitly when generating a snapshot for a dataset that was never
+  pipelined.
+- The explorer itself never writes back to the snapshot — it is read-only once
+  loaded; `generate_snapshot` is the only writer and runs before launch.
+
 ## Web app
 
 ```bash

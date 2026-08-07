@@ -104,10 +104,10 @@ while len(idx) < n:
 
 | Parameter | Default | Effect |
 |-----------|---------|--------|
-| `alpha` | 0.4 | Weight on quality. Higher = prefer high-score views |
-| `beta` | 0.6 | Weight on diversity. Higher = spread views apart |
+| `alpha` | 0.5 | Weight on quality. Higher = prefer high-score views |
+| `beta` | 0.5 | Weight on diversity. Higher = spread views apart |
 
-`alpha` and `beta` need not sum to 1 (the scores are compared, not normalised), but the defaults treat them as balanced with a slight diversity bias.
+`alpha` and `beta` need not sum to 1 (the scores are compared, not normalised). The selector's own defaults are balanced (0.5 / 0.5); the pipeline overrides them with the config/CLI values `selector_alpha` (default 0.60) and `selector_beta` (default 0.40).
 
 ### Properties
 

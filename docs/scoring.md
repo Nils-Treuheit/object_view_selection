@@ -14,9 +14,9 @@ All quality scores are normalised to **[0, 1]**, where **1.0 = perfect** (ideal 
 Each is computed by a dedicated `QualityMetric` implementation in `quality/`:
 
 - **`BorderBlurQuality`** – boundary-band Laplacian variance divided by a fixed global anchor (`quality_anchors.blur_max_variance`, default 10000), clipped to 1.0. It reads the `laplacian` pre-filter stat when present; if absent (e.g. a standalone scorer), it computes the boundary-band variance directly from the image and mask (stroke width 9). The anchor is a dataset-independent constant so sharpness scores are comparable across datasets.
-- **`AreaQuality`** – Mask pixel fraction divided by `quality_anchors.area_max_fraction` (default 0.20), clipped to 1.0.
-- **`VincentsArtifactsQuality`** – `clip(1 − artifact_fraction / quality_anchors.artifacts_max_fraction, 0, 1)`: a mask whose artifact fraction reaches the anchor (default 0.05) scores 0.
-- **`CenternessQuality`** – how centred the mask is in the frame, computed from the mask centroid vs. the frame centre. A centred object scores 1.0.
+- **`AreaQuality`** – Mask pixel fraction divided by a fixed `0.20` max fraction (hardcoded in `quality/area.py`, equal to the `quality_anchors.area_max_fraction` default), clipped to 1.0.
+- **`VincentsArtifactsQuality`** – `clip(1 − artifact_fraction / max_fraction, 0, 1)`, where `max_fraction` comes from `quality_anchors.artifacts_max_fraction` (default 0.05): a mask whose artifact fraction reaches the anchor scores 0.
+- **`CenternessQuality`** – how centred the mask is in the frame, computed from the mask's **bounding-box centre** vs. the frame centre, with an exponential punishment ramp inside the last `BORDER_RAMP_PX = 10` px of the frame border (objects grazing the frame edge get crushed). A centred object scores 1.0.
 
 All four components are anchored in **fixed global max/min values**, independent of the dataset, so quality is comparable across datasets. The population-relative soft weights (`vincents_area`, `vincents_motion_blur`) are still computed by the soft pre-filter pass for diagnostics but are not scorer components.
 

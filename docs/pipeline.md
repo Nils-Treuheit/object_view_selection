@@ -39,14 +39,18 @@ The pipeline selects the best **N image/mask pairs** from a set of observations 
 bottle/
 ├── images/          # 00000.png, 00001.png, ...   (RGB)
 ├── masks/           # 00000.png, 00001.png, ...   (binary, same filenames)
-└── object_hands/    # 00000.png, 00001.png, ...   (binary, optional)
+├── object_hands/    # 00000.png, 00001.png, ...   (binary, optional)
+└── depth/           # 00000.png, 00001.png, ...   (optional, copied through to outputs)
 ```
 
-All files are aligned by numeric stem. The `object_hands/` directory is optional — when absent, the occlusion filter passes all observations.
+All files are aligned by numeric stem. The `object_hands/` directory is optional — when absent, the occlusion filter passes all observations. `depth/` is not read by the pipeline, but matching depth files are copied into the sample outputs when present (see Stage 5).
 
 ---
 
 ## Stage 1: Pre-Filtering
+
+Per-filter detail (algorithms, metrics, config, rejection behaviour) is in the
+[`docs/pre-filter/`](pre-filter/README.md) reference.
 
 The pre-filter runs the configured pipeline in order. The **default set** is deliberately small and conservative (port of `nit_view_selection/select_best_views.py`, reworked). None of the 5 default filters hard-reject with a single absolute cutoff; instead each has a **very relaxed absolute floor** (`threshold_min`) and/or removes **extreme bad outliers** relative to the population (`outlier_z`, fit on the accepted population via robust median/MAD statistics). Every default filter returns `(score, passed, reason)` with `score ∈ [0, 1]`:
 
@@ -114,14 +118,14 @@ Rejections are grouped on disk under `rejected_samples/<reason>/threshold-based/
 
 ### Soft pre-filters (population-adapted weights, optional)
 
-Two Vincent soft filters remain available (`VincentsAreaFilter`, `VincentsMotionBlurFilter`) and **never reject**. They compute a raw stat per observation, then a population pass converts it into a selection weight in (0, 1] using a robust median/MAD typical scale and a one-sided half-Gaussian falloff on the "bad" side:
+Two Vincent soft filters remain available (`VincentsAreaFilter`, `VincentsMotionBlurFilter`) and **never reject** in the default wiring. They compute a raw stat per observation, then a population pass converts it into a selection weight in (0, 1] using a robust median/MAD typical scale and a one-sided half-Gaussian falloff on the "bad" side. Raw stats are computed for all observations; the weight pass is fit **on the accepted set only**:
 
 ```
 weight = exp(-0.5 * (z / softness)^2),   z = (stat - median) / (MAD * 1.4826)
 ```
 
 - **VincentsAreaFilter** — `stat = vincent_area_fraction = mask_area / canvas_area`. Small masks are penalized (`low_bad`, `softness=0.3`). Weight stored as `vincents_area`.
-- **VincentsMotionBlurFilter** — `stat = vincent_boundary_blur_variance` = variance of the Laplacian restricted to the boundary band. Blurred boundaries are penalized (`low_bad`, `softness=0.3`, `stroke_width=9`). Weight stored as `vincents_motion_blur`.
+- **VincentsMotionBlurFilter** — `stat = vincent_boundary_blur_variance` = variance of the Laplacian restricted to the boundary band. Blurred boundaries are penalized (`low_bad`, `softness=0.3`, `stroke_width=9`). Weight stored as `vincents_motion_blur`. The class supports an absolute `hard_min_variance` floor (reason `motion_blur`), but `build_soft_filters` does **not** forward it, so the floor stays 0.0 and the default pipeline never hard-rejects here.
 
 ### Filter Pipeline Order
 
@@ -133,7 +137,7 @@ The default order in `FilterConfig.filter_order` is:
 4. **blur_tenengrad** — boundary-band gradient sharpness
 5. **vincents_artefacts** — mask artifact score
 
-Early filters reject quickly, avoiding unnecessary computation. The population outlier statistics are fit once on the full dataset before filtering (only the accepted set feeds the robust stats).
+Early filters reject quickly, avoiding unnecessary computation. The population outlier statistics are fit **once on the full dataset** before the filtering loop (`filter_pipeline.fit_observations`, only for filters with `outlier_z` set); scores are then compared against that robust median/MAD distribution during the pass.
 
 **Legacy filters** (`border`, `area`, `occlusion`, `confidence`, `completeness`, and the old whole-image `blur`) are kept for custom `--filter_order` runs but are NOT part of the default set and are not tested / likely not working as proper pre-filters.
 
@@ -166,7 +170,7 @@ All weights are configured in `QualityWeights` and sum to 1.
 - **BorderBlurQuality:** `min(laplacian / max_variance, 1.0)` where `max_variance` is the fixed global anchor `quality_anchors.blur_max_variance` (default 10000). If the `laplacian` pre-filter stat is absent (e.g. a standalone scorer), it computes the boundary-band Laplacian variance directly from the image and mask (stroke width 9).
 - **AreaQuality:** `min(area_ratio / 0.20, 1.0)` where `area_ratio` is computed from the mask and 0.20 is `quality_anchors.area_max_fraction`. Scores increase linearly up to 20% image coverage.
 - **VincentsArtifactsQuality:** `min(1 - vincent_artifact_fraction / max_fraction, 0)` clamped, anchored by `quality_anchors.artifacts_max_fraction` (default 0.05).
-- **CenternessQuality:** how centred the mask is in the frame — computed from the mask's centroid vs. frame centre; a centered object scores 1.0.
+- **CenternessQuality:** how centred the mask is in the frame — computed from the mask's **bounding-box centre** vs. the frame centre, with an exponential punishment ramp inside the last 10 px of the frame border (objects grazing the frame edge are the same failure mode as truncation and get crushed). A centred object scores 1.0.
 
 ### Confidence (post-hoc, diagnostic)
 
@@ -178,17 +182,29 @@ After quality scoring, an adaptive floor (see `docs/scoring.md`) excludes the wo
 
 ### ObservationMetrics Dataclass
 
-All computed values are stored on `observation.metrics`:
+All computed values are stored on `observation.metrics` (see
+`data_io/metrics.py`):
 
 ```python
-laplacian, tenengrad, area_ratio, border_ratio, border_free,
-edge_ratio, hand_overlap, solidity, extent, convexity, completeness,
-blur, area, centerness, confidence,
+# preprocessing (legacy / shape)
+laplacian, tenengrad, area_ratio, border_ratio,
+edge_top_ratio, edge_bottom_ratio, edge_left_ratio, edge_right_ratio, edge_ratio,
+hand_overlap, solidity, extent, convexity, completeness,
+
+# vincent pre-filters (raw stats + soft weights)
 vincent_pixel_count, vincent_touches_border,
 vincent_area_fraction, vincent_artifact_fraction, vincent_boundary_blur_variance,
 vincents_area, vincents_artefacts, vincents_motion_blur,
+
+# quality
+blur, area, centerness, confidence,
+
+# final score
 quality
 ```
+
+`border_free` (and the `score` alias) are `quality.csv` columns, not metric
+fields: `border_free = 1 - border_ratio` and `score = quality`.
 
 Quality scores and metrics are exported to `quality.csv`.
 
@@ -260,7 +276,7 @@ For environments without a GPU, classical shape descriptors can be used instead:
 | Descriptor | Dim | Invariance |
 |-----------|-----|-----------|
 | Hu moments | 7 | translation, rotation, scale |
-| Zernike moments | 27 | rotation |
+| Zernike moments | 65 (degree 10) | rotation |
 | Fourier descriptors | 32 | translation, rotation, scale, start point |
 | Shape Context | 60 | translation |
 
@@ -302,7 +318,7 @@ From the pool of accepted observations with quality scores and embeddings, selec
 1. Start with the highest-quality observation.
 2. Greedily pick the observation maximizing the weighted sum of quality and diversity.
 
-**Parameters:** `selector_alpha` (quality weight, default 0.45), `selector_beta` (diversity weight, default 0.55).
+**Parameters:** `selector_alpha` (quality weight, default 0.60), `selector_beta` (diversity weight, default 0.40).
 
 **Use case:** balanced quality-diversity trade-off.
 
@@ -353,68 +369,101 @@ Designed for datasets with camera pose information (e.g., NeRF, Gaussian Splatti
 
 ```
 outputs/
-├── report.json             # Full pipeline report + selection metrics
-├── quality.csv             # Per-observation quality metrics
-├── embeddings.npy          # Embedding matrix (accepted pool)
-├── selected_indices.npy    # Indices into embeddings.npy
-├── rejected.json           # Rejection reasons
-├── visualization.png       # Overview grid of selected views
-├── selected_samples/       # Selected tuples, re-organized by data type:
-│   └── <obj_id>/           #   named after the last component of data_root
-│       ├── rgb/            #   selected object images
-│       ├── mask/           #   selected object masks
-│       ├── depth/          #   only when <data_root>/depth exists
-│       └── hand_mask/      #   only when a hand mask is available
-├── accepted_samples/       # Accepted-but-unselected tuples (--debug), same layout
-│   └── <obj_id>/
-│       ├── rgb/
-│       ├── mask/
-│       └── hand_mask/
-└── rejected_samples/       # Rejected tuples grouped by rejection reason:
-    └── <reason>/           #   e.g. vincent_border_pixel, blur_laplacian,
-        ├── threshold-based/#   <reason>_threshold variants (below the
-        │   └── <obj_id>/   #   relaxed absolute floor; also the pure hard
-        │       ├── rgb/    #   reasons like vincent_empty_mask)
+├── report.json              # Full pipeline report + selection metrics
+├── quality.csv              # Per-observation quality metrics + "selected" flag
+├── embeddings.npy           # Embedding matrix (selection pool), --save_embeddings
+├── selected_indices.npy     # Row indices into embeddings.npy (pool order)
+├── selection_pool_ids.npy   # Frame ids aligned with embeddings.npy rows
+├── rejected.json            # [{id, reason}, ...]
+├── rejected_metrics.csv     # Per-rejected-observation metrics, --save_rejected
+├── visualization.png        # Overview grid of selected views, --save_visualization
+├── plots/                   # Diagnostic plots, --save_plots (see docs/plotting.md)
+├── bad_examples/            # Worst rejected frames (plotting, --save_plots)
+├── embedded_samples/        # What each embedding actually saw, --save_plots
+├── selected_samples/        # Selected tuples, re-organized by data type:
+│   └── <obj_id>/            #   named after the last component of data_root
+│       ├── rgb/             #   selected object images
+│       ├── mask/            #   selected object masks
+│       ├── depth/           #   only when <data_root>/depth exists
+│       └── hand_mask/       #   only when a hand mask is available
+├── accepted_samples/        # Accepted-but-unselected tuples (--debug only), same layout
+└── rejected_samples/        # Rejected tuples grouped by rejection reason:
+    └── <reason>/            #   e.g. vincent_border_pixel, blur_laplacian,
+        ├── threshold-based/ #   <reason>_threshold variants (below the
+        │   └── <obj_id>/    #   relaxed absolute floor; also the pure hard
+        │       ├── rgb/     #   reasons like vincent_empty_mask)
         │       ├── mask/
-        │       ├── depth/  #   only when <data_root>/depth exists
+        │       ├── depth/   #   only when <data_root>/depth exists
         │       └── hand_mask/
-        └── outlier-based/  #   <reason>_outlier variants (extreme bad
-            └── <obj_id>/   #   outliers relative to the population)
+        └── outlier-based/   #   <reason>_outlier variants (extreme bad
+            └── <obj_id>/    #   outliers relative to the population)
                 ├── rgb/
                 ├── mask/
                 ├── depth/
                 └── hand_mask/
 ```
 
-### report.json includes:
+Defaults: `save_rejected`, `save_embeddings` and `save_visualization` are
+`True`; `save_plots` and `debug` are `False`. `depth/` frames are copied
+through only for frames that have a matching file in `<data_root>/depth`
+(`.png`, `.npy`, `.jpg`, `.jpeg`, `.tiff`); the loader itself only reads
+`images/`, `masks/` and `object_hands/`.
+
+### report.json includes (excerpt):
 
 ```json
 {
   "total": 423,
   "accepted": 359,
   "rejected": 64,
+  "selected": 10,
+  "num_views": 10,
+  "embedding": "dinov3",
+  "embedding_model": "facebook/dinov3-vitb16-pretrain-lvd1689m",
+  "selector": "quality_diversity",
+  "quality_floor": 0.42,
+  "selection_pool_count": 359,
+  "data_root": "/path/to/bottle",
+  "accepted_ids": [1, 2, 3, ...],
+  "selection_pool_ids": [1, 2, 3, ...],
   "selected_ids": [31, 169, 317, ...],
+  "rejected_ids": [4, 7, 9, ...],
   "selection_metrics": {
+    "selector": "quality_diversity",
+    "num_views": 10,
+    "selected_count": 10,
     "intra_set": {
       "mean_pairwise_cosine_distance": 0.49,
       "min_pairwise_cosine_distance": 0.31,
-      "max_pairwise_cosine_distance": 0.71
+      "max_pairwise_cosine_distance": 0.71,
+      "mean_similarity": 0.51
     },
     "quality": {
       "selected_mean": 0.80,
-      "pool_mean": 0.79
+      "selected_min": 0.61,
+      "selected_max": 0.94,
+      "pool_mean": 0.79,
+      "pool_min": 0.42,
+      "quality_floor": 0.42,
+      "selection_pool_count": 359
     },
     "coverage": {
       "mean_min_cosine_dist_to_selected": 0.19,
-      "pool_covered_within_03": 327
+      "median_min_cosine_dist_to_selected": 0.14,
+      "pool_covered_within_05": 349,
+      "pool_covered_within_03": 327,
+      "total_unselected": 349
     },
     "selection_log": [
-      {"step": 0, "id": 31, "quality": 0.84, "min_cosine_dist_to_set": null},
+      {"step": 0, "id": 31, "quality": 0.84, "min_cosine_dist_to_set": null, "score": null},
       {"step": 1, "id": 169, "quality": 0.78, "min_cosine_dist_to_set": 0.71, "score": 0.74}
     ]
   }
 }
 ```
+
+`selection_log` is only populated for the `quality_diversity` selector; the
+other selectors leave it empty.
 
 ---
 
@@ -443,7 +492,7 @@ All pipeline parameters are defined in `config.py`.
 | | `vincents_area.softness` | 0.3 | Area weight falloff (robust-MADs) |
 | | `vincents_motion_blur.softness` | 0.3 | Boundary-blur weight falloff (robust-MADs) |
 | | `vincents_motion_blur.stroke_width` | 9 | Boundary-band stroke width |
-| | `vincents_motion_blur.hard_min_variance` | 120 | Optional absolute floor on band variance |
+| | `vincents_motion_blur.hard_min_variance` | 120 | Absolute floor on band variance — defined in config but **not forwarded** by `build_soft_filters`, so effectively inactive |
 | | `filter_order` | `[vincent_empty_mask, vincent_border_pixel, blur_laplacian, blur_tenengrad, vincents_artefacts]` | Pre-filter execution order |
 | | `area` / `border` / `occlusion` / `confidence` / `completeness` | — | Legacy filters, custom `--filter_order` only (not tested / likely not working) |
 | **Quality** | `quality_weights.blur` | 0.30 | Boundary-blur quality weight |

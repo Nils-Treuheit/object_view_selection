@@ -91,8 +91,10 @@ outputs/
         └── debug (--debug only):
             ├── selected_neighbors_knn.png         (5 nearest neighbours per selected view)
             ├── selected_neighbors_kmeans.png      (5 neighbours from the view's k-means cluster)
-            ├── selected_clusters_pca.png          (PCA scatter coloured by k-means cluster)
-            └── embedded_samples/samples_<NN>.png  (original, mask, 224×224 cut-out on contrast bg, + original mask)
+            └── selected_clusters_pca.png          (PCA scatter coloured by k-means cluster)
+
+└── embedded_samples/            (top-level sibling of plots/ and bad_examples/, --debug only)
+    └── samples_<NN>.png         (original, mask, 224×224 cut-out on contrast bg, + original mask)
 ```
 
 ## Plot Descriptions
@@ -201,13 +203,24 @@ By default only **PCA** and **MDS** plots are generated. Pass `--debug` (or set 
 
 ### Embedding Neighbour Diagnostics (`selection/`)
 
-`--debug` also enables three diagnostics (in `plotting_process/neighbor_plots.py`) that check whether the embedding space actually groups *similar-looking* frames together. For every final selected candidate, `NEIGHBORS_PER_CANDIDATE = 5` neighbours are shown:
+`--debug` also enables two sets of diagnostics that check whether the embedding
+space actually groups *similar-looking* frames together.
+
+In `plotting_process/neighbor_plots.py`, for every final selected candidate, `NEIGHBORS_PER_CANDIDATE = 5` neighbours are shown:
 
 - `selected_neighbors_knn.png` — one row per selected candidate: the candidate plus its **5 nearest neighbours by cosine distance** in embedding space. Each cell shows the frame id and, for neighbours, the cosine distance to the candidate; if the embeddings are meaningful, the neighbours should look like the candidate.
 - `selected_neighbors_kmeans.png` — the same grid, but neighbours are taken **from the candidate's k-means cluster** first (k-means is fit over the pool embeddings with `k` = number of selected views), only falling back to the overall nearest neighbours when the cluster has fewer than 5 members. This highlights whether k-means cluster membership matches visual similarity.
 - `selected_clusters_pca.png` — a PCA 2D scatter of the whole selection pool coloured by k-means cluster assignment, with the final selected candidates marked as numbered gold stars.
 
 These are pure diagnostics: they never change the pipeline output.
+
+In `plotting_process/embedded_samples_plots.py`, `--debug` additionally writes
+`embedded_samples/samples_<NN>.png` figures at the **top level of the output
+directory** (a sibling of `plots/` and `bad_examples/`). Each figure compares
+the original frames against the embedding model's actual input: one row per
+randomly sampled observation, showing the original frame, the original + mask
+overlay, the model's 224×224 cut-out (grown-mask crop on the static
+maximum-contrast background), and that input with the original mask overlaid.
 
 ## Standalone Plotting
 
@@ -256,6 +269,7 @@ plotting_process/
 ├── pre_filter_plots.py          # per-element pre-filter histograms
 ├── feature_plots.py             # per-feature overview + bad-example plots
 ├── neighbor_plots.py            # debug k-means / k-NN neighbour diagnostics
+├── embedded_samples_plots.py    # debug original-vs-embedding-input comparisons
 │
 ├── embedding_plots/
 │   ├── __init__.py              # debug-gated run_all()
