@@ -1,7 +1,7 @@
 import numpy as np
 
-from .base import BaseFilter
-from .vincent_utils import robust_center_scale
+from ..base import BaseFilter
+from ..vincent_utils import robust_center_scale
 
 
 class AreaFilter(BaseFilter):

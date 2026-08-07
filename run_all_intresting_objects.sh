@@ -5,7 +5,6 @@ set -e
 
 # Array of target dataset directories
 PATHS=(
-"/mnt/HDD1/Project_Code/nit_object_onboarding/workspace/intresting_objects/thermos_bottle"
 "/mnt/HDD1/Project_Code/nit_object_onboarding/workspace/intresting_objects/elephant"
 "/mnt/HDD1/Project_Code/nit_object_onboarding/workspace/intresting_objects/glass_bottle"
 "/mnt/HDD1/Project_Code/nit_object_onboarding/workspace/intresting_objects/keys"
@@ -14,6 +13,7 @@ PATHS=(
 "/mnt/HDD1/Project_Code/nit_object_onboarding/workspace/intresting_objects/ovgu_mug_dark"
 "/mnt/HDD1/Project_Code/nit_object_onboarding/workspace/intresting_objects/sun_screen"
 "/mnt/HDD1/Project_Code/nit_object_onboarding/workspace/intresting_objects/wallet"
+"/mnt/HDD1/Project_Code/nit_object_onboarding/workspace/intresting_objects/thermos_bottle"
 )
 
 # Loop over each path
@@ -34,9 +34,7 @@ for DATA_ROOT in "${PATHS[@]}"; do
         --num_views 10 \
         --plot \
         --debug \
-        --selector top_kmeans_xnn \
-        --kmeans_init farthest \
-        --kmeans_xnn_k 10
+        
 
     echo ""
 done

@@ -59,11 +59,13 @@ def build_filters(cfg: PipelineConfig, tuned=None):
         "blur_laplacian": _maybe_variant(BorderLaplacianBlurFilter(
             stroke_width=cfg.filters.blur_laplacian.stroke_width,
             max_variance=cfg.filters.blur_laplacian.max_variance,
+            hard_min_variance=cfg.filters.blur_laplacian.hard_min_variance,
             enabled=cfg.filters.blur_laplacian.enabled,
         ), cfg.filters.blur_laplacian),
         "blur_tenengrad": _maybe_variant(BorderTenengradBlurFilter(
             stroke_width=cfg.filters.blur_tenengrad.stroke_width,
             max_tenengrad=cfg.filters.blur_tenengrad.max_tenengrad,
+            hard_min_tenengrad=cfg.filters.blur_tenengrad.hard_min_tenengrad,
             enabled=cfg.filters.blur_tenengrad.enabled,
         ), cfg.filters.blur_tenengrad),
         "vincents_artefacts": _maybe_variant(VincentsArtifactsFilter(
@@ -77,7 +79,7 @@ def build_filters(cfg: PipelineConfig, tuned=None):
         # proper pre-filters (occlusion, completeness, area, confidence).
         # ------------------------------------------------------------------ #
         "area": _maybe_variant(AreaFilter(
-            minimum_ratio=tuned.get("area_minimum_ratio", cfg.filters.area.minimum_ratio),
+            hard_min_area_fraction=tuned.get("area_minimum_ratio", cfg.filters.area.minimum_ratio),
             enabled=cfg.filters.area.enabled,
         ), cfg.filters.area),
         "border": _maybe_variant(BorderFilter(
@@ -94,7 +96,7 @@ def build_filters(cfg: PipelineConfig, tuned=None):
             enabled=cfg.filters.confidence.enabled,
         ), cfg.filters.confidence),
         "completeness": _maybe_variant(CompletenessFilter(
-            minimum_score=tuned.get("completeness_minimum_score", cfg.filters.completeness.minimum_score),
+            threshold_minimum_score=tuned.get("completeness_minimum_score", cfg.filters.completeness.minimum_score),
             enabled=cfg.filters.completeness.enabled,
         ), cfg.filters.completeness),
     }

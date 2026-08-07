@@ -3,7 +3,7 @@ import numpy as np
 from .base import BaseFilter
 from .vincent_utils import compute_artifact_mask, mask_to_foreground, robust_center_scale
 
-MASK_ARTIFACT_KERNEL_SIZE = 3
+MASK_ARTIFACT_KERNEL_SIZE = 10
 
 
 class VincentsArtifactsFilter(BaseFilter):

@@ -38,30 +38,24 @@ class CompletenessFilter(BaseFilter):
     stat_attr = "extent"
     weight_attr = "completeness_weight"
     direction = "low_bad"                       # low extent => fragment / poor segmentation
-    softness = EXTENT_SCORE_SOFTNESS
 
     def __init__(
         self,
-        softness: float | None = None,
-        min_solidity: float = MIN_SOLIDITY_DEFAULT,
-        hard_min_extent: float = MIN_EXTENT_DEFAULT,
-        threshold_min_solidity: float | None = None,
-        threshold_min_extent: float | None = None,
-        threshold_min_weight: float | None = None,
+        threshold_min_softness: float = EXTENT_SCORE_SOFTNESS,
+        threshold_min_solidity: float = MIN_SOLIDITY_DEFAULT,
+        threshold_min_extent: float = MIN_EXTENT_DEFAULT,
+        threshold_minimum_score: float | None = None,
         outlier_z: float | None = None,
         enabled: bool = True,
     ):
 
         super().__init__(enabled)
 
-        self.softness = softness if softness is not None else self.EXTENT_SCORE_SOFTNESS
-        self.min_solidity = min_solidity            # legacy alias (also set hard_min_extent via weight floor)
-        self.hard_min_extent = hard_min_extent      # absolute garbage floor on raw extent
-
         # reject_soft_variants layer thresholds (on the fit weight in (0,1])
         self.threshold_min_solidity = threshold_min_solidity
         self.threshold_min_extent = threshold_min_extent
-        self.threshold_min_weight = threshold_min_weight
+        self.threshold_min_softness = threshold_min_softness
+        self.threshold_minimum_score = threshold_minimum_score
 
         # outlier_z on raw extent -> requires population pass
         self.outlier_z = outlier_z
@@ -108,16 +102,28 @@ class CompletenessFilter(BaseFilter):
             return -1.0, True, ""
 
         solidity, extent_value, convexity_value = self._compute_raw_stats(observation)
-        observation.metrics.solidity = solidity
-        observation.metrics.extent     = extent_value
-        observation.metrics.convexity  = convexity_value
+        observation.metrics.solidity  = solidity
+        observation.metrics.extent    = extent_value
+        observation.metrics.convexity = convexity_value
+
+        score = (
+            self.WEIGHTS[0] * solidity
+            + self.WEIGHTS[1] * extent_value
+            + self.WEIGHTS[2] * convexity_value
+        )
         observation.metrics.completeness = score
 
         # -- absolute garbage floors --
-        if extent_value < self.hard_min_extent:
-            return 0.0, False, f"{self.reason}_threshold"
-        if self.min_solidity > 0 and solidity < self.min_solidity:
-            return 0.0, False, f"{self.reason}_threshold"
+        if extent_value < self.threshold_min_extent:
+            return 0.0, False, f"{self.reason}_extent_threshold"
+        if self.threshold_min_solidity > 0 and solidity < self.threshold_min_solidity:
+            return 0.0, False, f"{self.reason}_solidity_threshold"
+        # TODO: is this correct ?
+        if self.threshold_min_softness > 0 and convexity_value < self.threshold_min_softness:
+            return 0.0, False, f"{self.reason}_softness_threshold"
+        # TODO: how useful is a per attribute plus a total score filter? just tuning over-head?
+        if isinstance(self.threshold_minimum_score, float) and score < self.threshold_minimum_score:
+            return 0.0, False, f"{self.reason}_score_threshold"
 
         # -- population outlier (extent, "low" tail) --
         if self.outlier_z is not None and self._robust is not None:
@@ -125,20 +131,10 @@ class CompletenessFilter(BaseFilter):
             z = (extent_value - median) / robust_scale
             if z <= -self.outlier_z:
                 # still return the composite score so diagnostics are visible
-                passed_score = (
-                    self.WEIGHTS[0] * solidity
-                    + self.WEIGHTS[1] * extent_value
-                    + self.WEIGHTS[2] * convexity_value
-                )
-                return passed_score, False, f"{self.reason}_outlier"
+                return score, False, f"{self.reason}_outlier"
 
         # -- pass --
-        passed_score = (
-            self.WEIGHTS[0] * solidity
-            + self.WEIGHTS[1] * extent_value
-            + self.WEIGHTS[2] * convexity_value
-        )
-        return passed_score, True, self.reason
+        return score, True, self.reason
 
     # ------------------------------------------------------------------ #
     # Helper: pull the raw mask statistics                                 #

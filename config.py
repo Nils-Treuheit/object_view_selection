@@ -12,7 +12,8 @@ class LaplacianBlurConfig:
     """
     enabled: bool = True
     stroke_width: int = 9
-    max_variance: float = 10000.0
+    max_variance: float = 20000.0
+    hard_min_variance: float = 4000.0
     threshold_min: float = 0.01
     outlier_z: float = 3.0
 
@@ -26,7 +27,8 @@ class TenengradBlurConfig:
     """
     enabled: bool = True
     stroke_width: int = 9
-    max_tenengrad: float = 100.0
+    max_tenengrad: float = 150.0
+    hard_min_tenengrad: float = 33.0
     threshold_min: float = 0.10
     outlier_z: float = 3.0
 
@@ -111,7 +113,7 @@ class VincentsAreaConfig:
 @dataclass
 class VincentsArtifactsConfig:
     enabled: bool = True
-    kernel_size: int = 3
+    kernel_size: int = 10
     # artifact fraction at which the filter's goodness score hits 0.0
     max_fraction: float = 0.05
     # very relaxed absolute floor and extreme-bad-outlier removal on the score
