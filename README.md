@@ -102,14 +102,14 @@ object_view_selection/
 ├── run.py                  # Pipeline entry point (argparse)
 ├── config.py               # All configuration dataclasses
 ├── data_io/                # Observation/dataset loaders + metrics
-├── preprocessing/          # Pre-filters + FilterVariant (threshold/outlier)
+├── preprocessing/          # Pre-filters: ScoreFilter/OutlierFilter rejection + legacy
 ├── quality/                # 4-component weighted quality scorer
 ├── embeddings/             # Learned embedding models + crop helpers
 ├── descriptors/            # CPU shape descriptors (hu/zernike/fourier/shape_context)
 ├── selection/              # 6 subset-selection algorithms
 ├── utils/                  # Threshold tuner, visualization helpers
 ├── plotting_process/       # Diagnostic plotting (run.py + standalone wrapper)
-├── embedding_explorer_tool/# Interactive 3D kMeans/xNN explorer (web + tkinter)
+├── embedding_explorer_tool/# Interactive 3D kMeans/xNN explorer (web)
 ├── tests/                  # Correctness + smoke test suites
 └── docs/                   # Reference documentation (see below)
 ```
@@ -122,5 +122,5 @@ object_view_selection/
 - [`docs/thresholds.md`](docs/thresholds.md) — Auto-threshold tuning strategy
 - [`docs/selection_algorithms.md`](docs/selection_algorithms.md) — Selection algorithm deep-dive
 - [`docs/plotting.md`](docs/plotting.md) — Diagnostic plots and standalone usage
-- [`docs/explorer.md`](docs/explorer.md) — Embedding explorer (web + tkinter) reference
+- [`docs/explorer.md`](docs/explorer.md) — Embedding explorer (web) reference
 - [`docs/testing.md`](docs/testing.md) — Test suites and how to run them

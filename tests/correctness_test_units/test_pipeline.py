@@ -323,7 +323,7 @@ def test_build_filters_includes_vincent_hard_filters():
 
 
 def test_build_filters_order_matches_config():
-    from preprocessing.variants import FilterVariant
+    from preprocessing.variants import OutlierFilter
     from run import build_filters
     from config import PipelineConfig
 
@@ -345,7 +345,7 @@ def test_build_filters_order_matches_config():
 
     run_order = []
     for f in pipeline.filters:
-        cls = f.inner if isinstance(f, FilterVariant) else f
+        cls = f.inner if isinstance(f, OutlierFilter) else f
         run_order.append(class_to_key[type(cls).__name__])
     assert run_order == cfg.filters.filter_order, f"order mismatch: {run_order}"
 
@@ -463,8 +463,8 @@ def test_confidence_is_weakest_link():
         )
 
 
-def test_build_filters_wraps_configured_hard_variants():
-    from preprocessing.variants import FilterVariant
+def test_build_filters_configured_hard_outliers():
+    from preprocessing.variants import OutlierFilter
     from run import build_filters
     from config import PipelineConfig
 
@@ -472,24 +472,25 @@ def test_build_filters_wraps_configured_hard_variants():
     cfg.filters.filter_order = [
         "vincent_empty_mask", "blur_laplacian", "area",
     ]
-    cfg.filters.blur_laplacian.threshold_min = 0.2
+    cfg.filters.blur_laplacian.outlier_z = 3.0
     cfg.filters.area.outlier_z = 3.0
 
     pipeline = build_filters(cfg, tuned={})
 
     wrapped = {}
     for f in pipeline.filters:
-        if isinstance(f, FilterVariant):
+        if isinstance(f, OutlierFilter):
             wrapped[type(f.inner).__name__] = f
 
-    assert "BorderLaplacianBlurFilter" in wrapped, "blur_laplacian wrapped with threshold_min"
-    assert wrapped["BorderLaplacianBlurFilter"].threshold_min == 0.2
-    assert wrapped["BorderLaplacianBlurFilter"].outlier_z == 3.0
+    blur = [f for f in pipeline.filters
+            if type(f).__name__ == "BorderLaplacianBlurFilter"][0]
+    assert blur.outlier_z == 3.0, "default blur filter implements outlier itself"
+    assert blur.need_fitting(), "outlier_z set -> requires population fit"
 
     assert "AreaFilter" in wrapped, "area wrapped with outlier_z"
     assert wrapped["AreaFilter"].outlier_z == 3.0
 
-    assert pipeline.requires_fit, "pipeline requires population fit for outlier mode"
+    assert pipeline.need_fitting, "pipeline requires population fit for outlier mode"
 
 
 def test_build_soft_filters_propagates_knobs():
@@ -497,14 +498,13 @@ def test_build_soft_filters_propagates_knobs():
     from config import PipelineConfig
 
     cfg = PipelineConfig(auto_thresholds=False)
-    cfg.filters.vincents_area.threshold_min = 0.3
-    cfg.filters.vincents_motion_blur.outlier_z = 3.0
+    cfg.filters.vincents_area.outlier_z = 3.0
+    cfg.filters.vincents_motion_blur.outlier_z = 2.0
 
     soft_filters = build_soft_filters(cfg)
 
     assert "vincents_area" in soft_filters
     assert "vincents_motion_blur" in soft_filters
-    assert soft_filters["vincents_area"].threshold_min == 0.3
-    assert soft_filters["vincents_area"].outlier_z is None
-    assert soft_filters["vincents_motion_blur"].outlier_z == 3.0
-    assert soft_filters["vincents_motion_blur"].threshold_min is None
+    assert soft_filters["vincents_area"].outlier_z == 3.0
+    assert soft_filters["vincents_area"].hard_min is None
+    assert soft_filters["vincents_motion_blur"].outlier_z == 2.0

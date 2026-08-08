@@ -52,7 +52,12 @@ All files are aligned by numeric stem. The `object_hands/` directory is optional
 Per-filter detail (algorithms, metrics, config, rejection behaviour) is in the
 [`docs/pre-filter/`](pre-filter/README.md) reference.
 
-The pre-filter runs the configured pipeline in order. The **default set** is deliberately small and conservative (port of `nit_view_selection/select_best_views.py`, reworked). None of the 5 default filters hard-reject with a single absolute cutoff; instead each has a **very relaxed absolute floor** (`threshold_min`) and/or removes **extreme bad outliers** relative to the population (`outlier_z`, fit on the accepted population via robust median/MAD statistics). Every default filter returns `(score, passed, reason)` with `score ∈ [0, 1]`:
+The pre-filter runs the configured pipeline in order. The **default set** is deliberately small and conservative (port of `nit_view_selection/select_best_views.py`, reworked). Every non-binary default filter implements two `BaseFilter` rejection criteria, both on its **raw stat** in natural units:
+
+- an **absolute garbage threshold** that filters out complete unusable garbage (`hard_min` floor / `hard_max` ceiling, reason `<reason>_threshold`), and
+- a **population-based extreme-bad-outlier** rejection (`outlier_z`, robust median/MAD z over the population, reason `<reason>_outlier`).
+
+Both are implemented once by the shared `ScoreFilter` base (`preprocessing/base.py` + `preprocessing/filter_utils.py`). The binary hard filters (empty mask, border pixel) reject on a structural condition with a bare reason. Every default filter returns `(score, passed, reason)` with `score ∈ [0, 1]`:
 
 ```python
 score   ∈ [0, 1]    # pass/fail score
@@ -84,9 +89,9 @@ Measures sharpness of the **object boundary band** — `band = dilate(mask) XOR 
 
 **Score:** `min(laplacian / max_variance, 1.0)`
 
-**Rejection:** if the score falls below the relaxed floor `threshold_min` (reason `blur_laplacian_threshold`), or is an extreme bad outlier relative to the population (reason `blur_laplacian_outlier`).
+**Rejection:** if the raw Laplacian variance falls below the absolute garbage floor `hard_min_variance` (reason `blur_laplacian_threshold`), or is an extreme bad outlier relative to the population (reason `blur_laplacian_outlier`).
 
-**Config:** `LaplacianBlurConfig(stroke_width=9, max_variance=10000, threshold_min=0.01, outlier_z=3.0)`
+**Config:** `LaplacianBlurConfig(stroke_width=9, max_variance=20000, hard_min_variance=4000, outlier_z=3.0)`
 
 ### BorderTenengradBlurFilter (blur_tenengrad)
 
@@ -96,9 +101,9 @@ Complementary boundary-band sharpness measure based on the gradient magnitude.
 
 **Score:** `min(tenengrad / max_tenengrad, 1.0)`
 
-**Rejection:** same relaxed-floor / population-outlier scheme (reasons `blur_tenengrad_threshold` / `blur_tenengrad_outlier`).
+**Rejection:** same garbage-floor / population-outlier scheme (reasons `blur_tenengrad_threshold` / `blur_tenengrad_outlier`).
 
-**Config:** `TenengradBlurConfig(stroke_width=9, max_tenengrad=100, threshold_min=0.10, outlier_z=3.0)`
+**Config:** `TenengradBlurConfig(stroke_width=9, max_tenengrad=150, hard_min_tenengrad=33, outlier_z=3.0)`
 
 ### VincentsArtifactsFilter (vincents_artefacts)
 
@@ -108,13 +113,13 @@ Ported from `nit_view_selection/select_best_views.py`. Penalises speckled, holed
 
 **Score:** `min(1 - artifact_fraction / max_fraction, 0)` clamped — i.e. the fraction anchored by `max_fraction`.
 
-**Rejection:** score pre-filter — relaxed floor + population-outlier removal (reasons `vincents_artefacts_threshold` / `vincents_artefacts_outlier`). It is a *score* pre-filter, never a pure hard reject.
+**Rejection:** both `BaseFilter` criteria on the raw artifact fraction — an absolute garbage ceiling `hard_max_fraction` (reason `vincents_artefacts_threshold`) and population-outlier removal (reason `vincents_artefacts_outlier`).
 
-**Config:** `VincentsArtifactsConfig(kernel_size=3, max_fraction=0.05, threshold_min=0.05, outlier_z=3.0)`
+**Config:** `VincentsArtifactsConfig(kernel_size=3, max_fraction=0.05, hard_max_fraction=0.15, outlier_z=3.0)`
 
 ### Rejection Layering
 
-Rejections are grouped on disk under `rejected_samples/<reason>/threshold-based/` (the bare `_threshold` variants, plus the pure hard filters) and `rejected_samples/<reason>/outlier-based/` (the `_outlier` variants). See `preprocessing/variants.py` (FilterVariant) and `save_rejected_samples_by_reason` in `run.py`.
+Rejections are grouped on disk under `rejected_samples/<reason>/threshold-based/` (the `_threshold` variants, plus the pure hard filters) and `rejected_samples/<reason>/outlier-based/` (the `_outlier` variants). See `preprocessing/base.py` (`ScoreFilter`) and `save_rejected_samples_by_reason` in `run.py`. The legacy filters — which implement only their own absolute cutoff — get the population outlier layered on by `OutlierFilter` (`preprocessing/variants.py`) when their config sets `outlier_z`.
 
 ### Soft pre-filters (population-adapted weights, optional)
 
@@ -124,8 +129,8 @@ Two Vincent soft filters remain available (`VincentsAreaFilter`, `VincentsMotion
 weight = exp(-0.5 * (z / softness)^2),   z = (stat - median) / (MAD * 1.4826)
 ```
 
-- **VincentsAreaFilter** — `stat = vincent_area_fraction = mask_area / canvas_area`. Small masks are penalized (`low_bad`, `softness=0.3`). Weight stored as `vincents_area`. Never rejects.
-- **VincentsMotionBlurFilter** — `stat = vincent_boundary_blur_variance` = variance of the Laplacian restricted to the boundary band. Blurred boundaries are penalized (`low_bad`, `softness=0.3`, `stroke_width=9`). Weight stored as `vincents_motion_blur`. Unlike the area filter it is also a working pre-filter: `evaluate` reports a quality-scaled stat score and implements both `BaseFilter` rejection criteria — an absolute `hard_min_variance` floor (reason `vincents_motion_blur_threshold`, forwarded from config and active by default at 120.0) and a population-based `outlier_z` removal (reason `vincents_motion_blur_outlier`, fit over the population via `fit`/`requires_fit`). See `docs/pre-filter/vincents_motion_blur.md`.
+- **VincentsAreaFilter** — `stat = vincent_area_fraction = mask_area / canvas_area`. Small masks are penalized (`low_bad`, `softness=0.3`). Weight stored as `vincents_area`. As a `ScoreFilter` it also implements the absolute garbage floor (`hard_min_area_fraction`, disabled by default) and the `outlier_z` population removal, so it can act as a working pre-filter.
+- **VincentsMotionBlurFilter** — `stat = vincent_boundary_blur_variance` = variance of the Laplacian restricted to the boundary band. Blurred boundaries are penalized (`low_bad`, `softness=0.3`, `stroke_width=9`). Weight stored as `vincents_motion_blur`. It is also a working pre-filter: `evaluate` reports a quality-scaled stat score and implements both `BaseFilter` rejection criteria — an absolute `hard_min_variance` floor (reason `vincents_motion_blur_threshold`, forwarded from config and active by default at 120.0) and a population-based `outlier_z` removal (reason `vincents_motion_blur_outlier`, fit over the population via `fit`/`need_fitting`). See `docs/pre-filter/vincents_motion_blur.md`.
 
 ### Filter Pipeline Order
 
@@ -475,21 +480,22 @@ All pipeline parameters are defined in `config.py`.
 |----------|-------|---------|-------------|
 | **Filters** | `blur_laplacian.enabled` | `True` | Boundary-band Laplacian pre-filter |
 | | `blur_laplacian.stroke_width` | 9 | Boundary-band stroke width |
-| | `blur_laplacian.max_variance` | 10000 | Score anchor for Laplacian variance |
-| | `blur_laplacian.threshold_min` | 0.01 | Relaxed absolute floor (score) |
+| | `blur_laplacian.max_variance` | 20000 | Score anchor for Laplacian variance |
+| | `blur_laplacian.hard_min_variance` | 4000 | Absolute garbage floor on the raw stat |
 | | `blur_laplacian.outlier_z` | 3.0 | Robust population-outlier z |
 | | `blur_tenengrad.enabled` | `True` | Boundary-band Tenengrad pre-filter |
 | | `blur_tenengrad.stroke_width` | 9 | Boundary-band stroke width |
-| | `blur_tenengrad.max_tenengrad` | 100 | Score anchor for Tenengrad magnitude |
-| | `blur_tenengrad.threshold_min` | 0.10 | Relaxed absolute floor (score) |
+| | `blur_tenengrad.max_tenengrad` | 150 | Score anchor for Tenengrad magnitude |
+| | `blur_tenengrad.hard_min_tenengrad` | 33 | Absolute garbage floor on the raw stat |
 | | `blur_tenengrad.outlier_z` | 3.0 | Robust population-outlier z |
 | | `vincents_artefacts.kernel_size` | 3 | Morphology kernel for artifact detection |
 | | `vincents_artefacts.max_fraction` | 0.05 | Artifact fraction at which the score hits 0 |
-| | `vincents_artefacts.threshold_min` | 0.05 | Relaxed absolute floor (score) |
+| | `vincents_artefacts.hard_max_fraction` | 0.15 | Absolute garbage ceiling on the raw stat |
 | | `vincents_artefacts.outlier_z` | 3.0 | Robust population-outlier z |
 | | `vincent_empty_mask.enabled` | `True` | Empty-mask hard filter |
 | | `vincent_border_pixel.enabled` | `True` | Border-pixel hard filter |
 | | `vincents_area.softness` | 0.3 | Area weight falloff (robust-MADs) |
+| | `vincents_area.hard_min_area_fraction` | 0.0 | Absolute garbage floor on area fraction (0 disables) |
 | | `vincents_motion_blur.softness` | 0.3 | Boundary-blur weight falloff (robust-MADs) |
 | | `vincents_motion_blur.stroke_width` | 9 | Boundary-band stroke width |
 | | `vincents_motion_blur.hard_min_variance` | 120 | Absolute floor on band variance (active — forwarded by `build_soft_filters`; reason `vincents_motion_blur_threshold`) |

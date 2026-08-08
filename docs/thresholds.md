@@ -58,16 +58,16 @@ Used when `auto_thresholds: false` or when a tuned value is not provided.
 | Config Field | Default | Description |
 |-------------|---------|-------------|
 | `LaplacianBlurConfig.stroke_width` | `9` | Boundary-band stroke width |
-| `LaplacianBlurConfig.max_variance` | `10000.0` | Score anchor for the Laplacian variance |
-| `LaplacianBlurConfig.threshold_min` | `0.01` | Relaxed absolute floor (score) |
+| `LaplacianBlurConfig.max_variance` | `20000.0` | Score anchor for the Laplacian variance |
+| `LaplacianBlurConfig.hard_min_variance` | `4000.0` | Absolute garbage floor on the raw stat |
 | `LaplacianBlurConfig.outlier_z` | `3.0` | Robust population-outlier z |
 | `TenengradBlurConfig.stroke_width` | `9` | Boundary-band stroke width |
-| `TenengradBlurConfig.max_tenengrad` | `100.0` | Score anchor for the Tenengrad magnitude |
-| `TenengradBlurConfig.threshold_min` | `0.10` | Relaxed absolute floor (score) |
+| `TenengradBlurConfig.max_tenengrad` | `150.0` | Score anchor for the Tenengrad magnitude |
+| `TenengradBlurConfig.hard_min_tenengrad` | `33.0` | Absolute garbage floor on the raw stat |
 | `TenengradBlurConfig.outlier_z` | `3.0` | Robust population-outlier z |
 | `VincentsArtifactsConfig.kernel_size` | `3` | Morphology kernel for artifact detection |
 | `VincentsArtifactsConfig.max_fraction` | `0.05` | Artifact fraction at which the score hits 0 |
-| `VincentsArtifactsConfig.threshold_min` | `0.05` | Relaxed absolute floor (score) |
+| `VincentsArtifactsConfig.hard_max_fraction` | `0.15` | Absolute garbage ceiling on the raw stat |
 | `VincentsArtifactsConfig.outlier_z` | `3.0` | Robust population-outlier z |
 
 ### Legacy filters (custom `--filter_order` only)
@@ -97,26 +97,46 @@ Filters early in the pipeline reject cheaply before more expensive checks. The p
 
 ---
 
-## Threshold & Outlier Variants (`preprocessing/variants.py`)
+## Threshold & Outlier Rejection (`preprocessing/base.py`)
 
-Every pre-filter's `evaluate` returns a `(score, passed, reason)` triple with a 0..1 "goodness" score (higher = better). A uniform wrapper, `FilterVariant`, layers two optional rejection modes on top of any filter — and the same logic runs over the soft filters' population weights — without changing the base filter's own behavior:
+Every non-binary pre-filter's `evaluate` returns a `(score, passed, reason)`
+triple with a 0..1 "goodness" score (higher = better). The shared `ScoreFilter`
+base implements both `BaseFilter` rejection criteria **on the raw stat**,
+once, so subclasses only supply `compute_stat` / `compute_score`:
 
 | Knob | Mode | Behavior | Reject reason |
 |------|------|----------|---------------|
-| `threshold_min` | absolute floor | `score < threshold_min` → reject | `<reason>_threshold` |
-| `outlier_z` | robust bad-outlier | population fit (median/MAD), `z <= -outlier_z` → reject | `<reason>_outlier` |
+| `hard_min` / `hard_max` | absolute garbage threshold | raw `stat` outside the bound → reject regardless of the population | `<reason>_threshold` |
+| `outlier_z` | robust bad-outlier | population fit (median/MAD), `z` beyond `outlier_z` on the `direction` tail → reject | `<reason>_outlier` |
 
-Both modes key off the same 0..1 score every filter already returns, so they are uniform across filters. When the inner filter rejects on its own, its reason is kept verbatim (no variant suffix). The population fit is skipped entirely when no filter sets `outlier_z`, so default pipeline behavior is unchanged.
+The population fit is skipped entirely when no filter sets `outlier_z`
+(`need_fitting()` returns `True` only then), so default pipeline behavior is
+unchanged. The pipeline flags the two-phase pass via
+`FilterPipeline.need_fitting` / `fit_observations`.
 
-### Default pre-filters (`FilterVariant` via `run.build_filters`)
+### Default pre-filters (`ScoreFilter` via `run.build_filters`)
 
-The default blur/artifact filters set both knobs by default, e.g. `LaplacianBlurConfig(threshold_min=0.01, outlier_z=3.0)`. Setting `outlier_z` makes the pipeline flag `requires_fit` and run one population pass (`FilterPipeline.fit_observations`) over all observations before the main loop; the median/MAD robust stats are then used for the z test. This requires the whole pre-filter pass to be two-phase.
+The default blur/artifact filters implement both criteria themselves, e.g.
+`LaplacianBlurConfig(hard_min_variance=4000.0, outlier_z=3.0)`. Setting
+`outlier_z` makes the filter report `need_fitting() == True`; the pipeline runs
+one population pass (`FilterPipeline.fit_observations`) over all observations
+before the main loop, and the robust stats are then used for the z test.
 
-### Soft filters (`reject_soft_variants` via `run.py`)
+### Legacy filters (`OutlierFilter` via `run.build_filters`)
 
-`VincentsAreaFilter` never hard-rejects during `evaluate`; it derives a population weight in `(0, 1]`. When `VincentsAreaConfig` or `VincentsMotionBlurConfig` set `threshold_min` or `outlier_z`, the pipeline moves accepted observations whose weight trips the cutoff into `rejected` right after the soft pass, with annotated reasons (`vincents_area_threshold`, `vincents_motion_blur_outlier`, …) so the per-reason sample folders group them cleanly.
+Legacy filters (`AreaFilter`, `BorderFilter`, …) implement only their own
+absolute cutoff. When their config sets `outlier_z`, `run.py` wraps them in
+`OutlierFilter` (`preprocessing/variants.py`), which layers the population
+extreme-bad-outlier rejection on top without touching the inner filter's logic.
 
-`VincentsMotionBlurFilter` additionally implements both rejection criteria itself inside `evaluate` — the absolute `hard_min_variance` floor on the raw stat and the `outlier_z` population removal on the raw stat (fit via `fit`/`requires_fit`, run by `apply_soft_filters` before the per-observation pass). The weight-based layer above remains available as a complementary path.
+### Soft filters (`apply_soft_filters` via `run.py`)
+
+`VincentsAreaFilter` and `VincentsMotionBlurFilter` also implement both
+rejection criteria themselves via `ScoreFilter` — the absolute
+`hard_min_area_fraction` / `hard_min_variance` floor on the raw stat and an
+`outlier_z` population removal — so they can act as working pre-filters
+(`apply_soft_filters` runs their `fit` before the per-observation pass and
+moves rejected observations out of `accepted` with the annotated reason).
 
 ---
 
@@ -133,7 +153,7 @@ python run.py --data_root ... --no-auto-thresholds
 ### Permanently (config.py)
 ```python
 auto_thresholds = False
-filters.blur_laplacian.threshold_min = 0.02
+filters.blur_laplacian.hard_min_variance = 5000.0
 filters.blur_laplacian.outlier_z = 3.5
 ```
 

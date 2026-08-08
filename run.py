@@ -23,7 +23,7 @@ from preprocessing.vincent_border_pixel import VincentBorderPixelFilter
 from preprocessing.vincent_empty_mask import VincentEmptyMaskFilter
 from preprocessing.vincents_area_filter import VincentsAreaFilter
 from preprocessing.vincents_artefacts import VincentsArtifactsFilter
-from preprocessing.legacy.vincents_motion_blur import VincentsMotionBlurFilter
+from preprocessing.vincents_motion_blur import VincentsMotionBlurFilter
 from quality.area import AreaQuality
 from quality.blur import BorderBlurQuality
 from quality.centerness import CenternessQuality
@@ -31,14 +31,19 @@ from quality.quality_scorer import QualityScorer
 from quality.vincent import VincentsArtifactsQuality
 
 
-def _maybe_variant(f, conf):
-    """Wrap a pre-filter in a threshold/outlier variant when configured."""
-    threshold_min = getattr(conf, "threshold_min", None)
+def _maybe_outlier(f, conf):
+    """Wrap a pre-filter in a population-outlier rejection when configured.
+
+    Filters that implement their own absolute threshold criterion (the legacy
+    ``AreaFilter`` / ``BorderFilter`` / ...) get the population-based
+    extreme-bad-outlier rejection layered on by ``OutlierFilter`` when the
+    config sets ``outlier_z``.
+    """
     outlier_z = getattr(conf, "outlier_z", None)
-    if threshold_min is None and outlier_z is None:
+    if outlier_z is None:
         return f
-    from preprocessing.variants import FilterVariant
-    return FilterVariant(f, threshold_min=threshold_min, outlier_z=outlier_z)
+    from preprocessing.variants import OutlierFilter
+    return OutlierFilter(f, outlier_z=outlier_z)
 
 
 def build_filters(cfg: PipelineConfig, tuned=None):
@@ -46,9 +51,11 @@ def build_filters(cfg: PipelineConfig, tuned=None):
         tuned = {}
 
     # NOTE: the default pre-filter set is deliberately small and deliberately
-    # conservative. Every default filter only removes (a) awful-quality samples
-    # below a very relaxed bare-minimum threshold and (b) extreme bad outliers
-    # relative to the population (FilterVariant: threshold_min / outlier_z).
+    # conservative. Every default filter removes (a) awful-quality samples
+    # below a very relaxed bare-minimum absolute threshold and (b) extreme bad
+    # outliers relative to the population. Both criteria are implemented by
+    # each filter itself via the shared ScoreFilter base (see
+    # preprocessing/base.py + preprocessing/filter_utils.py).
     available = {
         "vincent_empty_mask": VincentEmptyMaskFilter(
             enabled=cfg.filters.vincent_empty_mask.enabled,
@@ -56,47 +63,51 @@ def build_filters(cfg: PipelineConfig, tuned=None):
         "vincent_border_pixel": VincentBorderPixelFilter(
             enabled=cfg.filters.vincent_border_pixel.enabled,
         ),
-        "blur_laplacian": _maybe_variant(BorderLaplacianBlurFilter(
+        "blur_laplacian": BorderLaplacianBlurFilter(
             stroke_width=cfg.filters.blur_laplacian.stroke_width,
             max_variance=cfg.filters.blur_laplacian.max_variance,
             hard_min_variance=cfg.filters.blur_laplacian.hard_min_variance,
+            outlier_z=cfg.filters.blur_laplacian.outlier_z,
             enabled=cfg.filters.blur_laplacian.enabled,
-        ), cfg.filters.blur_laplacian),
-        "blur_tenengrad": _maybe_variant(BorderTenengradBlurFilter(
+        ),
+        "blur_tenengrad": BorderTenengradBlurFilter(
             stroke_width=cfg.filters.blur_tenengrad.stroke_width,
             max_tenengrad=cfg.filters.blur_tenengrad.max_tenengrad,
             hard_min_tenengrad=cfg.filters.blur_tenengrad.hard_min_tenengrad,
+            outlier_z=cfg.filters.blur_tenengrad.outlier_z,
             enabled=cfg.filters.blur_tenengrad.enabled,
-        ), cfg.filters.blur_tenengrad),
-        "vincents_artefacts": _maybe_variant(VincentsArtifactsFilter(
+        ),
+        "vincents_artefacts": VincentsArtifactsFilter(
             kernel_size=cfg.filters.vincents_artefacts.kernel_size,
             max_fraction=cfg.filters.vincents_artefacts.max_fraction,
+            hard_max_fraction=cfg.filters.vincents_artefacts.hard_max_fraction,
+            outlier_z=cfg.filters.vincents_artefacts.outlier_z,
             enabled=cfg.filters.vincents_artefacts.enabled,
-        ), cfg.filters.vincents_artefacts),
+        ),
         # ------------------------------------------------------------------ #
         # Legacy pre-filters, kept for custom --filter_order only.
         # NOT part of the default set and NOT tested / likely not working as
         # proper pre-filters (occlusion, completeness, area, confidence).
         # ------------------------------------------------------------------ #
-        "area": _maybe_variant(AreaFilter(
-            hard_min_area_fraction=tuned.get("area_minimum_ratio", cfg.filters.area.minimum_ratio),
+        "area": _maybe_outlier(AreaFilter(
+            minimum_ratio=tuned.get("area_minimum_ratio", cfg.filters.area.minimum_ratio),
             enabled=cfg.filters.area.enabled,
         ), cfg.filters.area),
-        "border": _maybe_variant(BorderFilter(
+        "border": _maybe_outlier(BorderFilter(
             maximum_ratio=tuned.get("border_maximum_ratio", cfg.filters.border.maximum_ratio),
             edge_maximum_ratio=tuned.get("border_edge_maximum_ratio", cfg.filters.border.edge_maximum_ratio),
             enabled=cfg.filters.border.enabled,
         ), cfg.filters.border),
-        "occlusion": _maybe_variant(OcclusionFilter(
+        "occlusion": _maybe_outlier(OcclusionFilter(
             maximum_overlap=tuned.get("occlusion_maximum_overlap", cfg.filters.occlusion.maximum_overlap),
             enabled=cfg.filters.occlusion.enabled,
         ), cfg.filters.occlusion),
-        "confidence": _maybe_variant(ConfidenceFilter(
-            hard_min_confidence=cfg.filters.confidence.minimum_confidence,
+        "confidence": _maybe_outlier(ConfidenceFilter(
+            minimum_confidence=cfg.filters.confidence.minimum_confidence,
             enabled=cfg.filters.confidence.enabled,
         ), cfg.filters.confidence),
-        "completeness": _maybe_variant(CompletenessFilter(
-            threshold_minimum_score=tuned.get("completeness_minimum_score", cfg.filters.completeness.minimum_score),
+        "completeness": _maybe_outlier(CompletenessFilter(
+            minimum_score=tuned.get("completeness_minimum_score", cfg.filters.completeness.minimum_score),
             enabled=cfg.filters.completeness.enabled,
         ), cfg.filters.completeness),
     }
@@ -107,37 +118,32 @@ def build_filters(cfg: PipelineConfig, tuned=None):
     return FilterPipeline(filters)
 
 
-def _soft_with_variant(f, conf):
-    f.threshold_min = getattr(conf, "threshold_min", None)
-    f.outlier_z = getattr(conf, "outlier_z", None)
-    return f
-
-
 def build_soft_filters(cfg: PipelineConfig):
     """Population-adapted soft pre-filters (ported from nit_view_selection).
 
     These compute raw per-observation stats and then a population pass turns
     those stats into robust selection weights in (0, 1]. They are kept as
     diagnostics — none of them feeds the default pre-filter set or the
-    4-component quality score. Optional ``threshold_min`` / ``outlier_z``
-    knobs add a rejection pass on the fit weights (see
-    ``reject_soft_variants``); both ``VincentsMotionBlurFilter`` and
-    ``VincentsAreaFilter`` additionally implement both ``BaseFilter`` rejection
-    criteria themselves (absolute threshold floor + outlier_z population outlier),
-    so they can act as working pre-filters.
+    4-component quality score. Both ``VincentsAreaFilter`` and
+    ``VincentsMotionBlurFilter`` implement both ``BaseFilter`` rejection
+    criteria themselves (absolute threshold floor + outlier_z population
+    outlier via the shared ``ScoreFilter`` base), so they can act as working
+    pre-filters.
     """
     return {
-        "vincents_area": _soft_with_variant(VincentsAreaFilter(
+        "vincents_area": VincentsAreaFilter(
             softness=cfg.filters.vincents_area.softness,
             hard_min_area_fraction=cfg.filters.vincents_area.hard_min_area_fraction,
+            outlier_z=cfg.filters.vincents_area.outlier_z,
             enabled=cfg.filters.vincents_area.enabled,
-        ), cfg.filters.vincents_area),
-        "vincents_motion_blur": _soft_with_variant(VincentsMotionBlurFilter(
+        ),
+        "vincents_motion_blur": VincentsMotionBlurFilter(
             softness=cfg.filters.vincents_motion_blur.softness,
             stroke_width=cfg.filters.vincents_motion_blur.stroke_width,
             hard_min_variance=cfg.filters.vincents_motion_blur.hard_min_variance,
+            outlier_z=cfg.filters.vincents_motion_blur.outlier_z,
             enabled=cfg.filters.vincents_motion_blur.enabled,
-        ), cfg.filters.vincents_motion_blur),
+        ),
     }
 
 
@@ -149,7 +155,7 @@ def apply_soft_filters(soft_filters, accepted, rejected=None):
     accepted set (rejected observations do not compete for selection).
 
     Soft filters that implement the ``BaseFilter`` rejection criteria
-    (``requires_fit`` + ``evaluate`` returning ``passed=False``, e.g. the
+    (``need_fitting`` + ``evaluate`` returning ``passed=False``, e.g. the
     motion-blur threshold/outlier modes) run their population fit first and
     move the observations they reject out of ``accepted`` with the annotated
     reason; already-rejected observations keep their original reason.
@@ -159,7 +165,7 @@ def apply_soft_filters(soft_filters, accepted, rejected=None):
     all_observations = list(accepted) + list(rejected)
     for soft_filter in soft_filters.values():
         # population pass for outlier-mode filters (before per-observation evaluate)
-        if getattr(soft_filter, "requires_fit", lambda: False)():
+        if getattr(soft_filter, "need_fitting", lambda: False)():
             soft_filter.fit(all_observations)
 
         for obs in all_observations:
@@ -444,9 +450,10 @@ def _base_reason(reason):
 def _rejection_mode(reason):
     """Map a rejection reason to its ``{threshold,outlier}-based`` subfolder.
 
-    Reasons carrying the ``_threshold`` / ``_outlier`` suffix (FilterVariant)
-    map to their mode; pure hard reasons (empty mask, border pixel) are
-    absolute structural rejects and fall under ``threshold-based``.
+    Reasons carrying the ``_threshold`` / ``_outlier`` suffix (the two
+    ``BaseFilter`` rejection criteria) map to their mode; pure hard reasons
+    (empty mask, border pixel) are absolute structural rejects and fall under
+    ``threshold-based``.
     """
     if reason.endswith("_outlier"):
         return "outlier-based"
@@ -524,7 +531,7 @@ def run_pipeline(cfg: PipelineConfig):
     accepted = []
     rejected = []
 
-    if filter_pipeline.requires_fit:
+    if filter_pipeline.need_fitting:
         print("Fitting pre-filter outlier statistics on the population...")
         filter_pipeline.fit_observations(dataset.observations)
 
@@ -537,9 +544,6 @@ def run_pipeline(cfg: PipelineConfig):
     print(f"Accepted: {len(accepted)}, Rejected: {len(rejected)}")
 
     apply_soft_filters(soft_filters, accepted, rejected)
-
-    from preprocessing.variants import reject_soft_variants
-    reject_soft_variants(soft_filters, accepted, rejected)
 
     if cfg.debug:
         rejection_counts = {}

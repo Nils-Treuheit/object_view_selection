@@ -1099,7 +1099,7 @@ def test_rejected_samples_export():
 def test_filter_order_cli_override():
     """--filter_order reorders the pre-filter pipeline; default is the config order."""
     import run
-    from preprocessing.variants import FilterVariant
+    from preprocessing.variants import OutlierFilter
     from config import PipelineConfig
 
     cfg = PipelineConfig()
@@ -1109,7 +1109,7 @@ def test_filter_order_cli_override():
     ], "default filter order is the current setup")
 
     built = run.build_filters(cfg)
-    inner = [f.inner if isinstance(f, FilterVariant) else f for f in built.filters]
+    inner = [f.inner if isinstance(f, OutlierFilter) else f for f in built.filters]
     names = [type(f).__name__ for f in inner]
     check(names == ["VincentEmptyMaskFilter", "VincentBorderPixelFilter",
                     "BorderLaplacianBlurFilter", "BorderTenengradBlurFilter",
@@ -1118,7 +1118,7 @@ def test_filter_order_cli_override():
 
     cfg.filters.filter_order = ["blur_tenengrad", "vincents_artefacts"]
     built = run.build_filters(cfg)
-    inner = [f.inner if isinstance(f, FilterVariant) else f for f in built.filters]
+    inner = [f.inner if isinstance(f, OutlierFilter) else f for f in built.filters]
     check([type(f).__name__ for f in inner] == ["BorderTenengradBlurFilter", "VincentsArtifactsFilter"],
           "overridden order respected")
 

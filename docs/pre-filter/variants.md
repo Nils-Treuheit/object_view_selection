@@ -1,35 +1,40 @@
-# Rejection Layering: `FilterVariant` and `reject_soft_variants`
+# Rejection Layer: `OutlierFilter`
 
-**Source:** `preprocessing/variants.py`
+**Source:** `preprocessing/variants.py` (wrapper), `preprocessing/base.py`
+(`ScoreFilter`), `preprocessing/filter_utils.py` (shared helpers).
 
 Every pre-filter returns `(score, passed, reason)` with `score ∈ [0, 1]`
-(higher = better). `FilterVariant` wraps an existing filter and adds two
-optional rejection modes on top, **without touching the wrapped filter's own
-logic**. This lets the score filters (`blur_laplacian`, `blur_tenengrad`,
-`vincents_artefacts`) keep a single, conservative rejection scheme, and lets
-the soft filters reject on their fitted weights.
+(higher = better). Every non-binary filter has to implement the two
+`BaseFilter` rejection criteria — an **absolute threshold** that filters out
+complete unusable garbage and a **population-based outlier** rejection that
+removes noticeably bad outliers — and `ScoreFilter`
+(`preprocessing/base.py`) is the single shared implementation of both, once.
 
-## Modes
+## The two rejection criteria (`ScoreFilter`)
 
-| Mode | Config knob | Rule | Reason suffix |
-|------|-------------|------|---------------|
-| Threshold | `threshold_min` | `score < threshold_min` → reject | `<reason>_threshold` |
-| Outlier | `outlier_z` | `z = (score - median) / MAD*1.4826 ≤ -outlier_z` → reject | `<reason>_outlier` |
+| Criterion | Config knob | Rule | Reason suffix |
+|-----------|-------------|------|---------------|
+| Absolute garbage threshold | `hard_min` / `hard_max` | raw `stat < hard_min` or `stat > hard_max` → reject | `<reason>_threshold` |
+| Population bad-outlier | `outlier_z` | `z = (stat - median) / (MAD * 1.4826)` beyond `outlier_z` on the `direction` tail → reject | `<reason>_outlier` |
 
-The threshold is an absolute, extremely-low-quality cutoff. The outlier mode
-is population-relative: scores are fit **once over the population**, then
-extreme bad outliers are dropped. Because both key off the same 0..1 score
-every filter already returns, the wrapper is uniform across hard and score
-filters.
+The threshold is an absolute, extremely-low-quality cutoff on the **raw stat**
+in its natural units. The outlier mode is population-relative: the robust
+(median, MAD*1.4826) of the raw stat is fit **once over the population**
+(`fit`), then extreme bad outliers are dropped. Subclasses only implement
+`compute_stat` (raw stat) and `compute_score` (stat → 0..1 goodness).
 
-## `FilterVariant`
+## `OutlierFilter`
 
 ```python
-FilterVariant(inner, threshold_min=None, outlier_z=None)
+OutlierFilter(inner, outlier_z=None)
 ```
 
+Wraps a filter that implements **only** its own absolute criterion (e.g. the
+legacy `AreaFilter` / `BorderFilter`) and layers the population outlier
+rejection on top, **without touching the wrapped filter's own logic**:
+
 - `name` — the wrapped filter's class name.
-- `requires_fit()` — `True` only when `outlier_z` is set; the pipeline calls
+- `need_fitting()` — `True` only when `outlier_z` is set; the pipeline calls
   `fit_observations` once before the main loop when any wrapped filter needs it.
 - `fit(observations)` — runs the inner filter on every observation to collect
   scores, then stores the robust center/scale (`median`, `MAD * 1.4826`). A
@@ -37,31 +42,29 @@ FilterVariant(inner, threshold_min=None, outlier_z=None)
 - `evaluate(observation)`:
   1. Defers to the inner filter; if the inner rejects, its reason is kept
      verbatim.
-  2. Otherwise applies the threshold check, then the outlier check, rejecting
-     with the annotated reason.
+  2. Otherwise applies the outlier check on the inner score, rejecting with
+     `<reason>_outlier`.
 
-## `reject_soft_variants(soft_filters, accepted, rejected)`
+The default pre-filters implement both criteria themselves via `ScoreFilter`
+and are therefore **not** wrapped; `OutlierFilter` exists for the legacy
+filters (wired through `_maybe_outlier` in `run.py`).
 
-Soft filters (`VincentsAreaFilter`, `VincentsMotionBlurFilter`) never
-hard-reject in `evaluate`; they store a population weight in `(0, 1]` on
-`obs.metrics.<weight_attr>`. When such a filter has `threshold_min` or
-`outlier_z` configured, this post-pass moves accepted observations whose
-weight trips the cutoff into `rejected`, with the annotated reason
-(`<name>_threshold` / `<name>_outlier`) so the per-reason sample folders group
-them cleanly.
+## Shared helpers (`preprocessing/filter_utils.py`)
 
-Called after `apply_soft_filters` in `run.py`:
-`reject_soft_variants(soft_filters, accepted, rejected)`.
-
-## Robust statistics (`preprocessing/vincent_utils.py`)
+The robust-fit / z-outlier logic that used to be copy-pasted into every filter
+lives in one module:
 
 ```python
 median, robust_scale = robust_center_scale(values)   # MAD * 1.4826
+robust = robust_fit(values)                           # (median, scale), scale floored at 1.0
+rejected = outlier_rejected(stat, robust, outlier_z, direction)
 ```
 
-MAD is the median absolute deviation from the median; multiplying by `1.4826`
-makes it a standard-deviation-equivalent scale that is robust to outliers
-unlike `std`.
+`fit_stat_robust(observations, compute_stat, enabled)` fits over a population;
+`one_sided_weight` / `fit_robust_scores` turn raw soft stats into `(0, 1]`
+selection weights. MAD is the median absolute deviation from the median;
+multiplying by `1.4826` makes it a standard-deviation-equivalent scale that is
+robust to outliers unlike `std`.
 
 ## On-disk grouping
 

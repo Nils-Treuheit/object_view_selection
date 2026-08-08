@@ -1,41 +1,49 @@
 from abc import abstractmethod
 
-import numpy as np
-
-from .base import BaseFilter
-from .vincent_utils import fit_robust_scores
+from .base import ScoreFilter
+from .filter_utils import fit_robust_scores
 
 
-class VincentSoftFilter(BaseFilter):
+class VincentSoftFilter(ScoreFilter):
     """Base for population-adapted soft pre-filters (ported from
     nit_view_selection/select_best_views.py).
 
-    A soft filter never hard-rejects: ``evaluate`` computes and stores a raw
-    per-observation stat, then ``fit_weights`` performs a population pass that
-    derives a robust (median/MAD) typical scale from the data itself and turns
-    the raw stats into selection weights in (0, 1].
+    A soft filter computes and stores a raw per-observation stat, then
+    ``fit_weights`` performs a population pass that derives a robust
+    (median/MAD) typical scale from the data itself and turns the raw stats
+    into selection weights in ``(0, 1]``.
+
+    Being a ``ScoreFilter`` it also implements both ``BaseFilter`` rejection
+    criteria on the raw stat (absolute garbage floor/ceiling + population
+    outlier z), so a soft filter can act as a working pre-filter when those
+    knobs are configured — while never rejecting during the weight pass.
     """
 
-    # metric attribute holding the raw per-observation stat
-    stat_attr = None
-    # metric attribute holding the final population weight
-    weight_attr = None
-    # "low_bad" or "high_bad"
-    direction = None
-    # softness in robust-MADs
-    softness = None
-    # threshold/outlier variant knobs applied to the fit weight (0,1]
-    threshold_min = None
-    outlier_z = None
+    def __init__(
+        self,
+        enabled=True,
+        hard_min: float | None = None,
+        hard_max: float | None = None,
+        outlier_z: float | None = None,
+        stat_attr: str | None = None,
+        reason: str | None = None,
+        direction: str = "low_bad",
+        weight_attr: str | None = None,
+        softness: float = 0.3,
+    ):
 
-    def evaluate(self, observation):
+        super().__init__(
+            enabled=enabled,
+            hard_min=hard_min,
+            hard_max=hard_max,
+            outlier_z=outlier_z,
+            stat_attr=stat_attr,
+            reason=reason,
+            direction=direction,
+        )
 
-        if not self.enabled:
-            return 1.0, True, ""
-
-        setattr(observation.metrics, self.stat_attr, float(self.compute_stat(observation)))
-
-        return 1.0, True, ""
+        self.weight_attr = weight_attr
+        self.softness = softness
 
     @abstractmethod
     def compute_stat(self, observation) -> float:

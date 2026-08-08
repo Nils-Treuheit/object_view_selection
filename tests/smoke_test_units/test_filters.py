@@ -28,12 +28,12 @@ def test_filter_basics(ds):
     score, passed, reason = af.evaluate(obs)
     check(isinstance(score, float), f"Artifacts score={score:.4f}")
 
-    from preprocessing.area_filter import AreaFilter
+    from preprocessing.legacy.area_filter import AreaFilter
     ar = AreaFilter(minimum_ratio=0.02, enabled=True)
     score, passed, reason = ar.evaluate(obs)
     check(isinstance(score, float), f"Area score={score:.4f}")
 
-    from preprocessing.border_truncation import BorderFilter
+    from preprocessing.legacy.border_truncation import BorderFilter
     btf = BorderFilter(maximum_ratio=0.01, enabled=True)
     score, passed, reason = btf.evaluate(obs)
     check(isinstance(score, float), f"Border score={score:.4f}")
@@ -58,7 +58,7 @@ def test_filter_basics(ds):
 
 def test_filter_rejection(ds):
     import numpy as np
-    from preprocessing.area_filter import AreaFilter
+    from preprocessing.legacy.area_filter import AreaFilter
 
     af = AreaFilter(minimum_ratio=0.02)
     bad = ds.observations[0]
@@ -66,7 +66,7 @@ def test_filter_rejection(ds):
     s, p, r = af.evaluate(bad)
     check(not p and r == "small_object", f"Area rejects empty mask: {r}")
 
-    from preprocessing.border_truncation import BorderFilter
+    from preprocessing.legacy.border_truncation import BorderFilter
     btf = BorderFilter(maximum_ratio=0.005)
     bad2 = ds.observations[0]
     bad2.mask = np.zeros_like(bad2.mask)

@@ -6,12 +6,11 @@ selection is applied. It visualises the embedding pool, the k-means clusters,
 the constrained xNN neighbourhoods and the final picks, and lets you inspect
 the actual frames side by side.
 
-Two frontends share the same algorithms (`embedding_explorer_tool/algorithms.py`):
+The frontend lives in `embedding_explorer_tool/` (single web app sharing the
+algorithms in `embedding_explorer_tool/algorithms.py`):
 
 - **Web app** — everything in one browser window, interactive Plotly figure with a
   **2D/3D** switch.
-- **tkinter app** — offline desktop mirror with an embedded matplotlib scatter,
-  also switchable between **2D** and **3D**, on a bright/white background.
 
 The MDS projection itself is a **pure MDS** of the embedding space (metric MDS
 over cosine distance, `algorithms.project_mds`) computed without any knowledge
@@ -164,25 +163,6 @@ The picks reproduced exactly what `run.py --selector top_kmeans_xnn` outputs
 for the same pool / init / xNN, so the explorer doubles as a debugging tool
 for the selector.
 
-## tkinter app
-
-```bash
-python -m embedding_explorer_tool.gui_tk
-python -m embedding_explorer_tool.gui_tk --output_dir ./outputs --data_root /path/to/bottle
-python -m embedding_explorer_tool.gui_tk \
-    --output_dir ./outputs_embedding_explorer \
-    --data_root /path/to/triprong \
-    --embedding dinov2 --embedding_model dinov2_vitb14_reg
-```
-
-Same controls and semantics as the web app, with an embedded matplotlib MDS
-scatter on a **white background**. The **View: 2D / 3D** radios in the top
-bar re-run `project_mds` with `n_components = 2` or `3` (the embeddings are
-unchanged) and re-draw the clusters/candidates/picks on the new projection.
-It accepts the same `--output_dir`, `--data_root`, `--embedding` and
-`--embedding_model` arguments (with the same auto-generation behaviour).
-Requires a graphical session (no Xvfb available on the current host).
-
 ## Module layout
 
 | File | Purpose |
@@ -191,5 +171,4 @@ Requires a graphical session (no Xvfb available on the current host).
 | `webapp_plotting.py` | Plotly figure builder |
 | `webapp.py` | Local HTTP server (`/`, `/api/run`, `/composite/`, `/image/`, `/mask/`) |
 | `webapp_template.html` | Single-page frontend (HTML/CSS/JS) |
-| `gui_tk.py` | tkinter + matplotlib mirror |
 | `static/plotly.min.js` | Vendored plotly bundle (offline) |

@@ -38,8 +38,9 @@ score   = 0.0 / 1.0
 |-------|---------|---------|
 | `enabled` | `True` | Run this filter |
 
-No `threshold_min` / `outlier_z` — the filter hard-rejects already, so no
-`FilterVariant` is wrapped around it (`run.py` only wraps score filters).
+No `hard_min` / `outlier_z` — the decision is binary (empty vs non-empty
+mask), so there is no raw-stat spectrum to fit and no `OutlierFilter` is
+wrapped around it (`run.py` only wraps score filters).
 
 ## Placement
 

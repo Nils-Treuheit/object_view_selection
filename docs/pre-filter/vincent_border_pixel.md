@@ -39,8 +39,9 @@ score   = 0.0 / 1.0
 |-------|---------|---------|
 | `enabled` | `True` | Run this filter |
 
-No `threshold_min` / `outlier_z` — this is a hard filter and is not wrapped
-in a `FilterVariant`.
+No `hard_min` / `outlier_z` — the decision is binary (touches the frame or
+not), so there is no raw-stat spectrum to fit and no `OutlierFilter` is
+wrapped around it.
 
 ## Relationship to the legacy `BorderFilter`
 

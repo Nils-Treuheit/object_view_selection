@@ -86,7 +86,7 @@ and implements the two rejection criteria from `BaseFilter`:
   z <= -outlier_z  →  (score, False, "vincents_area_outlier")
   ```
   Requires the `fit(observations)` population pass (run automatically by
-  `apply_soft_filters` when `requires_fit()` is true); the robust median/MAD
+  `apply_soft_filters` when `need_fitting()` is true); the robust median/MAD
   are taken from the raw stat distribution.
 
 - **Pass** <br>
@@ -94,9 +94,8 @@ and implements the two rejection criteria from `BaseFilter`:
   (score, True, "vincents_area")
   ```
 
-The fit weight path (`threshold_min` / `outlier_z` on the `(0, 1]` weight via
-`reject_soft_variants`) remains available as a complementary layer and reuses
-the same `vincents_area_threshold` / `vincents_area_outlier` reasons.
+Both rejection criteria are the shared `ScoreFilter` implementation (see
+`preprocessing/base.py` + `preprocessing/filter_utils.py`).
 
 ## Configuration (`VincentsAreaConfig`)
 
@@ -105,8 +104,7 @@ the same `vincents_area_threshold` / `vincents_area_outlier` reasons.
 | `enabled` | `True` | Compute the stat and weight |
 | `softness` | `0.3` | Falloff in robust-MADs |
 | `hard_min_area_fraction` | `0.0` | Absolute hard-reject floor on the raw fraction (`0` disables) |
-| `threshold_min` | `None` | Optional floor on the fitted weight (`reject_soft_variants` layer) |
-| `outlier_z` | `None` | Robust outlier cutoff — on the raw stat (`fit`/`evaluate`) and on the weight (`reject_soft_variants`) |
+| `outlier_z` | `None` | Robust population-outlier cutoff on the raw stat (`fit`/`evaluate`) |
 
 `hard_min_area_fraction` is forwarded from config by `build_soft_filters`, so 
 the configured value is active in the pipeline.

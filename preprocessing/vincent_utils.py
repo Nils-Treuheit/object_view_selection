@@ -1,14 +1,33 @@
 """
-Shared helpers ported from nit_view_selection/select_best_views.py.
+Shared mask/image helpers for the Vincent pre-filters.
 
-Used by the Vincent pre-filters:
-- hard: VincentEmptyMaskFilter, VincentBorderPixelFilter
-- soft (population-adapted): VincentsAreaFilter, VincentsArtifactsFilter,
-  VincentsMotionBlurFilter
+The robust population-scoring helpers previously living here
+(``robust_center_scale``, ``one_sided_weight``, ``fit_robust_scores``) moved to
+:mod:`preprocessing.filter_utils` — see that module for the shared fit / reject
+implementation used by every non-binary pre-filter.  They are re-exported here
+for backwards compatibility.
 """
 
 import cv2
 import numpy as np
+
+from .filter_utils import (  # noqa: F401  (re-exported for backwards compat)
+    fit_robust_scores,
+    one_sided_weight,
+    robust_center_scale,
+)
+
+__all__ = [
+    "compute_artifact_mask",
+    "compute_boundary_band",
+    "compute_boundary_blur_variance",
+    "compute_boundary_tenengrad",
+    "mask_to_foreground",
+    "touches_border_pixels",
+    "robust_center_scale",
+    "one_sided_weight",
+    "fit_robust_scores",
+]
 
 
 # --------------------------------------------------------------------------- #
@@ -91,65 +110,3 @@ def touches_border_pixels(mask: np.ndarray) -> bool:
         or mask[:, 0].any()
         or mask[:, -1].any()
     )
-
-
-# --------------------------------------------------------------------------- #
-# Robust population scoring
-# --------------------------------------------------------------------------- #
-
-
-def robust_center_scale(values: np.ndarray) -> tuple[float, float]:
-    """Median and MAD-derived robust scale (MAD * 1.4826 ~ std-equivalent)."""
-    values = np.asarray(values, dtype=float)
-    median = float(np.median(values))
-    robust_scale = float(np.median(np.abs(values - median))) * 1.4826
-    return median, robust_scale
-
-
-def one_sided_weight(
-    values: np.ndarray,
-    median: float,
-    robust_scale: float,
-    direction: str,
-    softness: float,
-) -> np.ndarray:
-    """One-sided half-Gaussian decay from the robust center.
-
-    Full weight on the "good" side of the median, smooth falloff on the "bad"
-    side. `direction` is "low_bad" (values below median are penalized) or
-    "high_bad" (values above median are penalized). `softness` is in
-    robust-MADs and controls how quickly the falloff bites.
-    """
-    values = np.asarray(values, dtype=float)
-    if direction == "high_bad":
-        deviation = np.maximum(values - median, 0.0)
-    elif direction == "low_bad":
-        deviation = np.maximum(median - values, 0.0)
-    else:
-        raise ValueError(f"unknown direction: {direction!r}")
-
-    if robust_scale <= 0:
-        return np.where(deviation <= 0, 1.0, 0.0)
-    z = deviation / robust_scale
-    return np.exp(-0.5 * (z / softness) ** 2)
-
-
-def fit_robust_scores(
-    observations,
-    stat_attr: str,
-    weight_attr: str,
-    direction: str,
-    softness: float,
-) -> None:
-    """Population pass: turn per-observation raw stats into robust (0,1] weights.
-
-    Stores the computed weight on ``observation.metrics.<weight_attr>``.
-    """
-    values = np.array(
-        [getattr(obs.metrics, stat_attr, 0.0) for obs in observations],
-        dtype=float,
-    )
-    median, robust_scale = robust_center_scale(values)
-    weights = one_sided_weight(values, median, robust_scale, direction, softness)
-    for obs, weight in zip(observations, weights):
-        setattr(obs.metrics, weight_attr, float(weight))

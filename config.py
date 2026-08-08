@@ -6,15 +6,14 @@ class LaplacianBlurConfig:
     """Boundary-band Laplacian-variance pre-filter (blur_laplacian).
 
     ``max_variance`` anchors the (0, 1] goodness score of the filter;
-    ``threshold_min`` is the very relaxed absolute floor (below = awful
-    quality) and ``outlier_z`` removes extreme bad outliers relative to the
-    population (see preprocessing/variants.py).
+    ``hard_min_variance`` is the absolute garbage floor on the raw stat and
+    ``outlier_z`` removes extreme bad outliers relative to the population
+    (both criteria implemented by the filter itself via ``ScoreFilter``).
     """
     enabled: bool = True
     stroke_width: int = 9
     max_variance: float = 20000.0
     hard_min_variance: float = 4000.0
-    threshold_min: float = 0.01
     outlier_z: float = 3.0
 
 
@@ -29,7 +28,6 @@ class TenengradBlurConfig:
     stroke_width: int = 9
     max_tenengrad: float = 150.0
     hard_min_tenengrad: float = 33.0
-    threshold_min: float = 0.10
     outlier_z: float = 3.0
 
 
@@ -39,7 +37,6 @@ class AreaConfig:
     # working as a proper pre-filter. Kept only for custom --filter_order.
     enabled: bool = True
     minimum_ratio: float = 0.01
-    threshold_min: float | None = None
     outlier_z: float | None = None
 
 
@@ -50,7 +47,6 @@ class BorderConfig:
     enabled: bool = True
     maximum_ratio: float = 0.05
     edge_maximum_ratio: float = 0.25
-    threshold_min: float | None = None
     outlier_z: float | None = None
 
 
@@ -60,7 +56,6 @@ class OcclusionConfig:
     # working as a proper pre-filter. Kept only for custom --filter_order.
     enabled: bool = True
     maximum_overlap: float = 0.15
-    threshold_min: float | None = None
     outlier_z: float | None = None
 
 
@@ -70,7 +65,6 @@ class ConfidenceConfig:
     # working as a proper pre-filter. Kept only for custom --filter_order.
     enabled: bool = False
     minimum_confidence: float = 0.5
-    threshold_min: float | None = None
     outlier_z: float | None = None
 
 
@@ -80,21 +74,18 @@ class CompletenessConfig:
     # working as a proper pre-filter. Kept only for custom --filter_order.
     enabled: bool = True
     minimum_score: float = 0.65
-    threshold_min: float | None = None
     outlier_z: float | None = None
 
 
 @dataclass
 class VincentEmptyMaskConfig:
     enabled: bool = True
-    threshold_min: float | None = None
     outlier_z: float | None = None
 
 
 @dataclass
 class VincentBorderPixelConfig:
     enabled: bool = True
-    threshold_min: float | None = None
     outlier_z: float | None = None
 
 
@@ -104,20 +95,18 @@ class VincentsAreaConfig:
     softness: float = 0.3
     # absolute garbage floor on the raw area fraction (0 disables)
     hard_min_area_fraction: float = 0.0
-    # threshold/outlier variants on the fit (0,1] weight (see preprocessing/variants.py)
-    # also used as an extreme-bad-outlier cutoff on the raw stat via fit/evaluate
-    threshold_min: float | None = None
+    # extreme-bad-outlier cutoff on the raw stat via fit/evaluate
     outlier_z: float | None = None
 
 
 @dataclass
 class VincentsArtifactsConfig:
     enabled: bool = True
-    kernel_size: int = 10
+    kernel_size: int = 3
     # artifact fraction at which the filter's goodness score hits 0.0
     max_fraction: float = 0.05
-    # very relaxed absolute floor and extreme-bad-outlier removal on the score
-    threshold_min: float = 0.05
+    # absolute garbage ceiling and extreme-bad-outlier removal on the raw stat
+    hard_max_fraction: float = 0.15
     outlier_z: float = 3.0
 
 
@@ -132,7 +121,6 @@ class VincentsMotionBlurConfig:
     # bottle), so this excludes the motion-blurred tail that the soft weight
     # would otherwise merely down-rank. 0 disables the hard reject.
     hard_min_variance: float = 120.0
-    threshold_min: float | None = None
     outlier_z: float | None = None
 
 

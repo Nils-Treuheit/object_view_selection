@@ -30,7 +30,7 @@ from preprocessing.vincent_utils import (
 )
 from preprocessing.vincents_area_filter import VincentsAreaFilter
 from preprocessing.vincents_artefacts import VincentsArtifactsFilter
-from preprocessing.legacy.vincents_motion_blur import VincentsMotionBlurFilter
+from preprocessing.vincents_motion_blur import VincentsMotionBlurFilter
 
 from tests.test_utils import (
     check,

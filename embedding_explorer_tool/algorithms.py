@@ -52,7 +52,6 @@ def generate_snapshot(output_dir: str | Path, data_root: str, embedding: str = D
         build_quality_scorer,
         build_soft_filters,
     )
-    from preprocessing.variants import reject_soft_variants
     from tqdm import tqdm
     from utils.threshold_tuner import tune_thresholds
 
@@ -82,7 +81,7 @@ def generate_snapshot(output_dir: str | Path, data_root: str, embedding: str = D
     soft_filters = build_soft_filters(cfg)
     model = build_embedding_model(cfg)
 
-    if filter_pipeline.requires_fit:
+    if filter_pipeline.need_fitting:
         print("Fitting pre-filter outlier statistics on the population...")
         filter_pipeline.fit_observations(dataset.observations)
 
@@ -96,7 +95,6 @@ def generate_snapshot(output_dir: str | Path, data_root: str, embedding: str = D
     print(f"Accepted: {len(accepted)}, Rejected: {len(rejected)}")
 
     apply_soft_filters(soft_filters, accepted, rejected)
-    reject_soft_variants(soft_filters, accepted, rejected)
 
     for obs in tqdm(accepted, desc="Scoring quality"):
         quality_scorer.score(obs)

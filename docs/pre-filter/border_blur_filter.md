@@ -240,24 +240,20 @@ Both filters follow the `BaseFilter` lifecycle:
 | Field | Default | Meaning |
 |-------|---------|---------|
 | `enabled` | `True` | Compute the stat and score |
-| `softness` | `0.3` | Falloff in robust-MADs (weight pass) |
 | `stroke_width` | `9` | Boundary-band stroke width (px) |
-| `hard_min_variance` | `100.0` | Absolute hard-reject floor on raw Laplacian variance (`0` disables) |
-| `max_variance` | `10000.0` | Scale anchor for the goodness score |
-| `outlier_z` | `None` | Robust outlier cutoff on raw stat (`fit`/`evaluate`) and weight pass |
-| `threshold_min` | `None` | Optional floor on the fitted weight (complementary layer) |
+| `hard_min_variance` | `4000.0` | Absolute hard-reject floor on raw Laplacian variance |
+| `max_variance` | `20000.0` | Scale anchor for the goodness score |
+| `outlier_z` | `3.0` | Robust population-outlier cutoff on raw stat (`fit`/`evaluate`) |
 
 ### BorderTenengradBlurFilter
 
 | Field | Default | Meaning |
 |-------|---------|---------|
 | `enabled` | `True` | Compute the stat and score |
-| `softness` | `0.3` | Falloff in robust-MADs (weight pass) |
 | `stroke_width` | `9` | Boundary-band stroke width (px) |
-| `hard_min_tenengrad` | `25.0` | Absolute hard-reject floor on raw Tenengrad (`0` disables) |
-| `max_tenengrad` | `100.0` | Scale anchor for the goodness score |
-| `outlier_z` | `None` | Robust outlier cutoff on raw stat (`fit`/`evaluate`) and weight pass |
-| `threshold_min` | `None` | Optional floor on the fitted weight (complementary layer) |
+| `hard_min_tenengrad` | `33.0` | Absolute hard-reject floor on raw Tenengrad |
+| `max_tenengrad` | `150.0` | Scale anchor for the goodness score |
+| `outlier_z` | `3.0` | Robust population-outlier cutoff on raw stat (`fit`/`evaluate`) |
 
 
 ## Notes

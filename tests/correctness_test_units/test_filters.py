@@ -517,7 +517,7 @@ def test_completeness():
 
 
 # ============================================================
-# THRESHOLD / OUTLIER VARIANTS
+# OUTLIER / SCORE REJECTION
 # ============================================================
 
 class _FakeScoreFilter(BaseFilter):
@@ -534,55 +534,18 @@ class _FakeScoreFilter(BaseFilter):
         return score, passed, self.reason
 
 
-def test_threshold_variant_rejects_below_cutoff():
+def test_outlier_filter_rejects_extreme_bad():
 
-    from preprocessing.variants import FilterVariant
-
-    inner = _FakeScoreFilter({0: 0.9, 1: 0.2})
-    var = FilterVariant(inner, threshold_min=0.5)
-
-    good = observation(make_image(), full_mask(), idx=0)
-    bad = observation(make_image(), full_mask(), idx=1)
-
-    _, p_good, r_good = var.evaluate(good)
-    _, p_bad, r_bad = var.evaluate(bad)
-
-    check(p_good and r_good == "x", f"Healthy passes, reason={r_good}")
-    check(
-        (not p_bad) and r_bad == "x_threshold",
-        f"Below cutoff rejected, reason={r_bad}",
-    )
-
-
-def test_threshold_variant_keeps_inner_reason():
-
-    from preprocessing.variants import FilterVariant
-
-    inner = _FakeScoreFilter({0: 0.9, 1: 0.4}, passed_by_index={1: False})
-    var = FilterVariant(inner, threshold_min=0.5)
-
-    bad = observation(make_image(), full_mask(), idx=1)
-
-    _, p, r = var.evaluate(bad)
-
-    check(
-        (not p) and r == "x",
-        f"Inner reject reason kept verbatim, reason={r}",
-    )
-
-
-def test_outlier_variant_rejects_extreme_bad():
-
-    from preprocessing.variants import FilterVariant
+    from preprocessing.variants import OutlierFilter
 
     rng = np.random.RandomState(0)
     scores = list(rng.normal(0.5, 0.1, 50))
     scores[49] = -1.0
 
     inner = _FakeScoreFilter(scores)
-    var = FilterVariant(inner, outlier_z=3.0)
+    var = OutlierFilter(inner, outlier_z=3.0)
 
-    check(var.requires_fit(), "Outlier variant requires a fit pass")
+    check(var.need_fitting(), "Outlier filter requires a fit pass")
 
     pop = [
         observation(make_image(), full_mask(), idx=i)
@@ -603,100 +566,125 @@ def test_outlier_variant_rejects_extreme_bad():
     )
 
 
-def test_soft_variant_threshold():
+def test_outlier_filter_no_knob_is_noop():
 
-    from preprocessing.variants import reject_soft_variants
-    from preprocessing.vincents_area_filter import VincentsAreaFilter
+    from preprocessing.variants import OutlierFilter
 
-    filt = VincentsAreaFilter(enabled=True)
-    filt.threshold_min = 0.4
+    inner = _FakeScoreFilter({0: 0.9, 1: 0.2})
+    var = OutlierFilter(inner)
 
-    accepted = []
-    for i, w in enumerate([0.9, 0.85, 0.3, 0.95]):
-        obs = observation(make_image(), full_mask(), idx=i)
-        obs.metrics.vincents_area = w
-        accepted.append(obs)
+    check(not var.need_fitting(), "No fit pass without outlier_z")
 
-    rejected = []
-    reject_soft_variants({"vincents_area": filt}, accepted, rejected)
+    good = observation(make_image(), full_mask(), idx=0)
+    low = observation(make_image(), full_mask(), idx=1)
 
-    check(len(accepted) == 3, f"3 kept, got {len(accepted)}")
-    check(len(rejected) == 1, f"1 rejected, got {len(rejected)}")
+    _, p_good, r_good = var.evaluate(good)
+    _, p_low, r_low = var.evaluate(low)
+
+    check(p_good and r_good == "x", f"Healthy passes, reason={r_good}")
+    check(p_low and r_low == "x", "No rejection without outlier_z")
+
+
+def test_outlier_filter_keeps_inner_reason():
+
+    from preprocessing.variants import OutlierFilter
+
+    inner = _FakeScoreFilter({0: 0.9, 1: 0.4}, passed_by_index={1: False})
+    var = OutlierFilter(inner, outlier_z=3.0)
+
+    bad = observation(make_image(), full_mask(), idx=1)
+
+    _, p, r = var.evaluate(bad)
+
     check(
-        rejected
-        and rejected[0].id == 2
-        and rejected[0].rejection_reason == "vincents_area_threshold",
-        f"Reason={rejected[0].rejection_reason if rejected else None}",
+        (not p) and r == "x",
+        f"Inner reject reason kept verbatim, reason={r}",
     )
 
 
-def test_soft_variant_outlier():
+def test_soft_filter_threshold_rejects_below_floor():
 
-    from preprocessing.variants import reject_soft_variants
     from preprocessing.vincents_area_filter import VincentsAreaFilter
 
-    filt = VincentsAreaFilter(enabled=True)
-    filt.outlier_z = 3.0
+    filt = VincentsAreaFilter(hard_min_area_fraction=0.02)
 
-    accepted = []
-    for i, w in enumerate([1.0, 0.9, 0.8, 0.7, 0.0]):
-        obs = observation(make_image(), full_mask(), idx=i)
-        obs.metrics.vincents_area = w
-        accepted.append(obs)
+    big = observation(make_image(), full_mask(), idx=0)
+    tiny = observation(make_image(), np.zeros((100, 100), np.uint8), idx=1)
 
-    rejected = []
-    reject_soft_variants({"vincents_area": filt}, accepted, rejected)
+    _, p_big, _ = filt.evaluate(big)
+    _, p_tiny, r_tiny = filt.evaluate(tiny)
 
-    check(len(rejected) == 1, f"1 rejected, got {len(rejected)}")
-    check(len(accepted) == 4, f"4 kept, got {len(accepted)}")
+    check(p_big, "Full mask passes the area floor")
     check(
-        rejected
-        and rejected[0].id == 4
-        and rejected[0].rejection_reason == "vincents_area_outlier",
-        f"Reason={rejected[0].rejection_reason if rejected else None}",
+        (not p_tiny) and r_tiny == "vincents_area_threshold",
+        f"Empty mask rejected below floor, reason={r_tiny}",
     )
 
 
-def test_soft_variant_no_knobs_is_noop():
+def test_soft_filter_outlier_rejects_extreme_bad():
 
-    from preprocessing.variants import reject_soft_variants
     from preprocessing.vincents_area_filter import VincentsAreaFilter
 
-    filt = VincentsAreaFilter(enabled=True)
+    filt = VincentsAreaFilter(outlier_z=3.0)
 
-    accepted = [
-        observation(make_image(), full_mask(), idx=i)
-        for i in range(4)
-    ]
-    rejected = []
-    reject_soft_variants({"vincents_area": filt}, accepted, rejected)
+    check(filt.need_fitting(), "Soft filter requires a fit pass for outlier mode")
 
-    check(len(accepted) == 4, "Nothing dropped without knobs")
-    check(len(rejected) == 0, "Nothing rejected without knobs")
+    pop = []
+    for i, radius in enumerate([60, 50, 55, 58, 52, 1]):
+        mask = np.zeros((100, 100), np.uint8)
+        yy, xx = np.ogrid[:100, :100]
+        mask[(xx - 50) ** 2 + (yy - 50) ** 2 < radius ** 2] = 255
+        pop.append(observation(make_image(), mask, idx=i))
+
+    filt.fit(pop)
+
+    _, p_bad, r_bad = filt.evaluate(pop[5])
+    _, p_good, _ = filt.evaluate(pop[0])
+
+    check(
+        (not p_bad) and r_bad == "vincents_area_outlier",
+        f"Extreme bad z rejected, reason={r_bad}",
+    )
+    check(p_good, "Typical mask passes the outlier check")
 
 
-def test_pipeline_variant_integration():
+def test_soft_filter_no_knobs_is_noop():
 
-    from preprocessing.variants import FilterVariant
+    from preprocessing.vincents_area_filter import VincentsAreaFilter
+
+    filt = VincentsAreaFilter()
+
+    check(not filt.need_fitting(), "No fit pass without outlier_z")
+
+    for i in range(4):
+        obs = observation(make_image(), full_mask(), idx=i)
+        _, passed, reason = filt.evaluate(obs)
+        check(passed, f"Nothing rejected without knobs (obs {i})")
+        check(reason == "vincents_area", f"Pass reason={reason}")
+
+
+def test_pipeline_outlier_integration():
+
+    from preprocessing.variants import OutlierFilter
     from preprocessing.filter_pipeline import FilterPipeline
 
-    inner = _FakeScoreFilter({0: 0.9, 1: 0.1, 2: 0.2})
-    var = FilterVariant(inner, threshold_min=0.5, outlier_z=3.0)
+    inner = _FakeScoreFilter({0: 0.5, 1: 0.55, 2: 0.6, 3: -1.0})
+    var = OutlierFilter(inner, outlier_z=3.0)
     pipeline = FilterPipeline([var])
 
-    check(pipeline.requires_fit, "Pipeline flags the outlier fit")
+    check(pipeline.need_fitting, "Pipeline flags the outlier fit")
 
     pop = [
         observation(make_image(), full_mask(), idx=i)
-        for i in range(3)
+        for i in range(4)
     ]
     pipeline.fit_observations(pop)
 
     check(pipeline.run(pop[0]), "Healthy passes through pipeline")
-    check(not pipeline.run(pop[1]), "Low score rejected by pipeline")
+    check(not pipeline.run(pop[3]), "Extreme bad score rejected by pipeline")
     check(
-        pop[1].rejection_reason == "x_threshold",
-        f"Pipeline reason={pop[1].rejection_reason}",
+        pop[3].rejection_reason == "x_outlier",
+        f"Pipeline reason={pop[3].rejection_reason}",
     )
 
 
@@ -713,11 +701,11 @@ FILTER_TESTS = [
     ("Occlusion filter", test_occlusion),
     ("Occlusion monotonicity", test_occlusion_monotonic),
     ("Completeness filter", test_completeness),
-    ("Threshold variant", test_threshold_variant_rejects_below_cutoff),
-    ("Threshold inner reason", test_threshold_variant_keeps_inner_reason),
-    ("Outlier variant", test_outlier_variant_rejects_extreme_bad),
-    ("Soft variant threshold", test_soft_variant_threshold),
-    ("Soft variant outlier", test_soft_variant_outlier),
-    ("Soft variant no-op", test_soft_variant_no_knobs_is_noop),
-    ("Pipeline variant integration", test_pipeline_variant_integration),
+    ("Outlier filter", test_outlier_filter_rejects_extreme_bad),
+    ("Outlier no-op", test_outlier_filter_no_knob_is_noop),
+    ("Outlier inner reason", test_outlier_filter_keeps_inner_reason),
+    ("Soft filter threshold", test_soft_filter_threshold_rejects_below_floor),
+    ("Soft filter outlier", test_soft_filter_outlier_rejects_extreme_bad),
+    ("Soft filter no-op", test_soft_filter_no_knobs_is_noop),
+    ("Pipeline outlier integration", test_pipeline_outlier_integration),
 ]
