@@ -381,7 +381,6 @@ def main():
     print(f"Pre-filter tuner on http://localhost:{args.port}/")
     print(f"  data_root: {app.data_root}")
     print(f"  snapshot output (embedding explorer): {app.output_dir}")
-    print(f"  embedding explorer (reads the snapshot): http://localhost:{args.port - 1}/")
     print("Press Ctrl+C to stop.")
     try:
         server.serve_forever()
