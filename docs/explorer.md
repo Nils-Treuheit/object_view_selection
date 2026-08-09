@@ -6,11 +6,13 @@ selection is applied. It visualises the embedding pool, the k-means clusters,
 the constrained xNN neighbourhoods and the final picks, and lets you inspect
 the actual frames side by side.
 
-The frontend lives in `embedding_explorer_tool/` (single web app sharing the
+The frontend lives in `embedding_explorer_tool/` (two web apps sharing the
 algorithms in `embedding_explorer_tool/algorithms.py`):
 
 - **Web app** — everything in one browser window, interactive Plotly figure with a
-  **2D/3D** switch.
+  **2D/3D** switch (port **8510**).
+- **Pre-filter tuner** — tune the pre-filter thresholds on a dataset, preview the
+  accept/reject outcome, then generate the snapshot the web app reads (port **8520**).
 
 The MDS projection itself is a **pure MDS** of the embedding space (metric MDS
 over cosine distance, `algorithms.project_mds`) computed without any knowledge
@@ -163,12 +165,70 @@ The picks reproduced exactly what `run.py --selector top_kmeans_xnn` outputs
 for the same pool / init / xNN, so the explorer doubles as a debugging tool
 for the selector.
 
+## Pre-filter tuner web app
+
+The second frontend (port **8520**) is the step before the explorer: it loads a
+dataset once and lets you tune the **pre-filter** thresholds and see exactly how
+many observations pass before any embedding runs.
+
+```bash
+python -m embedding_explorer_tool.prefilter_app
+python -m embedding_explorer_tool.prefilter_app --data_root /path/to/object \
+    --output_dir ./outputs_embedding_explorer --port 8520
+```
+
+Arguments:
+
+| Argument | Default | Effect |
+|----------|---------|--------|
+| `--data_root` | `.../workspace/intresting_objects/elephant` | Dataset root with `images/` and `masks/` |
+| `--output_dir` | `outputs_embedding_explorer` | Snapshot dir the explorer reads; "Run Embedding" writes here |
+| `--port` | `8520` | Local server port (one off the explorer's 8510) |
+
+Layout:
+
+```
+┌────────────────────────────┬─────────────────────────────┐
+│ Garbage Thresholds         │  PRE-FILTER RUN (text)      │
+│  blur_laplacian floor      │  observations / accepted /  │
+│  blur_tenengrad floor      │  rejected                   │
+│  artefacts ceiling  ...    │  applied thresholds         │
+│ Outlier Thresholds         │  rejected-by-filter counts  │
+│  z-cutoff per filter       │  accepted raw stats         │
+│  (checkbox to disable)     │                             │
+├────────────────────────────┼─────────────────────────────┤
+│ [Apply Auto Thresholds]    │  [Run Embedding]            │
+│ [Run Pre-Filter]           │                             │
+└────────────────────────────┴─────────────────────────────┘
+```
+
+- **Garbage Thresholds** — absolute floors / ceilings on the raw stats that
+  reject a sample regardless of the population
+  (`hard_min_variance`, `hard_min_tenengrad`, `hard_max_fraction`,
+  motion-blur floor, area floor).
+- **Outlier Thresholds** — robust population z-cutoffs
+  (`outlier_z` per filter); uncheck a row to disable that filter's outlier
+  rejection.
+- **Run Pre-Filter** — runs the actual `run.py` pre-filter pipeline
+  (`build_filters` + `build_soft_filters`) with the current knobs and renders
+  the outcome: applied thresholds, rejected-by-filter counts and the
+  accepted-set raw stats.
+- **Apply Auto Thresholds** — computes the data-driven thresholds
+  (`utils.threshold_tuner.tune_thresholds`, the same percentile floors as
+  `run.py --auto-thresholds`), writes them into the knob fields and runs the
+  pre-filter with them.
+- **Run Embedding** — generates the snapshot (`algorithms.generate_snapshot`)
+  with the current knobs into `--output_dir`, so a reload of the explorer
+  shows the newly-tuned selection pool.
+
 ## Module layout
 
 | File | Purpose |
 |------|---------|
 | `algorithms.py` | Snapshot loading, quality/farthest seeds, k-means, constrained xNN, pure MDS projection (2D or 3D), mask overlay, text output; `snapshot_exists` / `generate_snapshot` for producing a snapshot from a raw `--data_root` |
 | `webapp_plotting.py` | Plotly figure builder |
-| `webapp.py` | Local HTTP server (`/`, `/api/run`, `/composite/`, `/image/`, `/mask/`) |
-| `webapp_template.html` | Single-page frontend (HTML/CSS/JS) |
+| `webapp.py` | Explorer HTTP server (`/`, `/api/run`, `/composite/`, `/image/`, `/mask/`) |
+| `webapp_template.html` | Explorer frontend (HTML/CSS/JS) |
+| `prefilter_app.py` | Pre-filter tuner HTTP server (`/`, `/api/config`, `/api/run`, `/api/run_auto`, `/api/embed`) |
+| `prefilter_template.html` | Pre-filter tuner frontend (HTML/CSS/JS) |
 | `static/plotly.min.js` | Vendored plotly bundle (offline) |

@@ -82,6 +82,10 @@ python -m plotting_process.wrapper --input_dir ./outputs
 
 # Interactive 3D explorer of the kMeans + xNN selection pool
 python -m embedding_explorer_tool.webapp --output_dir ./outputs
+
+# Tune the pre-filter thresholds on a dataset, preview the accept/reject
+# outcome, then run the embedding (feeds the explorer's snapshot)
+python -m embedding_explorer_tool.prefilter_app
 ```
 
 ## Testing
@@ -109,7 +113,7 @@ object_view_selection/
 ├── selection/              # 6 subset-selection algorithms
 ├── utils/                  # Threshold tuner, visualization helpers
 ├── plotting_process/       # Diagnostic plotting (run.py + standalone wrapper)
-├── embedding_explorer_tool/# Interactive 3D kMeans/xNN explorer (web)
+├── embedding_explorer_tool/# kMeans/xNN explorer (web) + pre-filter threshold tuner (web)
 ├── tests/                  # Correctness + smoke test suites
 └── docs/                   # Reference documentation (see below)
 ```

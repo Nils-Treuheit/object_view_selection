@@ -93,6 +93,7 @@ def main():
         "tests.correctness_test_units.test_plotting",
         "tests.correctness_test_units.test_quality_floor",
         "tests.correctness_test_units.test_selection_algorithms",
+        "tests.correctness_test_units.test_prefilter_app",
     ]
 
     total_fn_pass = 0

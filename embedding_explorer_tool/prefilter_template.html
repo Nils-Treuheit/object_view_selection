@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pre-filter Threshold Tuner</title>
+<style>
+  :root {
+    --bg: #111318;
+    --panel: #181b22;
+    --border: #2a2e3a;
+    --fg: #d8dce6;
+    --dim: #8b93a5;
+    --accent: #3b5bdb;
+    --ok: #2f9e6e;
+    --bad: #e03131;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--fg);
+    font: 14px/1.45 -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  #topbar {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 12px 20px;
+    background: var(--panel);
+    border-bottom: 1px solid var(--border);
+  }
+  #topbar h1 { font-size: 16px; margin: 0; }
+  #topbar .meta { color: var(--dim); font-size: 12px; }
+  #topbar .spacer { flex: 1; }
+  button {
+    background: var(--accent);
+    color: #fff;
+    border: none;
+    border-radius: 6px;
+    padding: 8px 18px;
+    font-size: 13px;
+    cursor: pointer;
+  }
+  button:hover { filter: brightness(1.1); }
+  button:disabled { opacity: .5; cursor: default; }
+  #main {
+    display: grid;
+    grid-template-columns: 340px 1fr;
+    gap: 16px;
+    padding: 16px 20px;
+    align-items: start;
+  }
+  #left { display: flex; flex-direction: column; gap: 14px; }
+  .section {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px;
+  }
+  .section h2 {
+    margin: 0 0 10px;
+    font-size: 13px;
+    text-transform: uppercase;
+    letter-spacing: .08em;
+    color: var(--dim);
+  }
+  .section h2 .count { color: var(--accent); }
+  .row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+  .row:last-child { margin-bottom: 0; }
+  .row label { flex: 1; color: var(--fg); font-size: 12px; }
+  .row input[type=number] {
+    width: 90px;
+    background: var(--bg);
+    color: var(--fg);
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    padding: 4px 6px;
+    font-size: 12px;
+  }
+  .row input[type=checkbox] { accent-color: var(--accent); }
+  #right { display: flex; flex-direction: column; gap: 10px; }
+  textarea#textout {
+    width: 100%;
+    min-height: 60vh;
+    resize: vertical;
+    background: #0c0e12;
+    color: #c8cedd;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px;
+    font: 12px/1.5 ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    white-space: pre;
+  }
+  #bottom { display: flex; align-items: center; gap: 12px; }
+  #bottom .hint { color: var(--dim); font-size: 12px; }
+</style>
+</head>
+<body>
+  <div id="topbar">
+    <h1>Pre-filter Threshold Tuner</h1>
+    <span class="meta" id="meta">loading…</span>
+    <div class="spacer"></div>
+    <button id="autobtn">Apply Auto Thresholds</button>
+    <button id="runbtn">Run Pre-Filter</button>
+  </div>
+
+  <div id="main">
+    <div id="left">
+      <div class="section">
+        <h2>Garbage Thresholds <span class="count" id="garbage_count"></span></h2>
+        <div id="garbage_list"></div>
+      </div>
+      <div class="section">
+        <h2>Outlier Thresholds <span class="count" id="outlier_count"></span></h2>
+        <div id="outlier_list"></div>
+      </div>
+    </div>
+
+    <div id="right">
+      <textarea id="textout" readonly spellcheck="false">Loading…</textarea>
+      <div id="bottom">
+        <button id="embedbtn">Run Embedding</button>
+        <span class="hint">Writes the snapshot the embedding explorer page reads.</span>
+      </div>
+    </div>
+  </div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+let state = { garbage: {}, outlier: {} };
+
+function addGarbageRow(meta) {
+  const div = document.createElement("div");
+  div.className = "row";
+  div.dataset.key = meta.key;
+  const label = document.createElement("label");
+  label.textContent = meta.label;
+  const input = document.createElement("input");
+  input.type = "number";
+  input.min = meta.min; input.max = meta.max; input.step = meta.step;
+  input.value = meta.value;
+  div.append(label, input);
+  $("garbage_list").appendChild(div);
+}
+
+function addOutlierRow(meta) {
+  const div = document.createElement("div");
+  div.className = "row";
+  div.dataset.key = meta.key;
+  const label = document.createElement("label");
+  label.textContent = meta.label;
+  const check = document.createElement("input");
+  check.type = "checkbox";
+  check.checked = meta.enabled;
+  const input = document.createElement("input");
+  input.type = "number";
+  input.min = meta.min; input.max = meta.max; input.step = meta.step;
+  input.value = meta.value;
+  check.addEventListener("change", () => { input.disabled = !check.checked; });
+  input.disabled = !check.checked;
+  div.append(label, check, input);
+  $("outlier_list").appendChild(div);
+}
+
+function collectKnobs() {
+  const garbage = {};
+  $("garbage_list").querySelectorAll(".row").forEach((row) => {
+    garbage[row.dataset.key] = parseFloat(row.querySelector("input").value);
+  });
+  const outlier = {};
+  $("outlier_list").querySelectorAll(".row").forEach((row) => {
+    outlier[row.dataset.key] = {
+      enabled: row.querySelector("input[type=checkbox]").checked,
+      value: parseFloat(row.querySelector("input[type=number]").value),
+    };
+  });
+  return { garbage, outlier };
+}
+
+async function loadConfig() {
+  const res = await fetch("/api/config");
+  const data = await res.json();
+  $("meta").textContent = `${data.data_root} · ${data.n_observations} observations`;
+  data.knobs.garbage.forEach(addGarbageRow);
+  data.knobs.outlier.forEach(addOutlierRow);
+  $("garbage_count").textContent = `(${data.knobs.garbage.length})`;
+  $("outlier_count").textContent = `(${data.knobs.outlier.length})`;
+  state = collectKnobs();
+  await runPrefilter();
+}
+
+async function runAuto() {
+  $("autobtn").disabled = true;
+  try {
+    const res = await fetch("/api/run_auto", { method: "POST" });
+    const data = await res.json();
+    applyKnobs(data.garbage, data.outlier);
+    $("textout").value = data.text;
+  } catch (err) {
+    $("textout").value = "Error: " + err;
+  } finally {
+    $("autobtn").disabled = false;
+  }
+}
+
+function applyKnobs(garbage, outlier) {
+  const setRows = (rows, values) => rows.forEach((row) => {
+    if (row.dataset.key in values) row.querySelector("input").value = values[row.dataset.key];
+  });
+  if (garbage) setRows($("garbage_list").querySelectorAll(".row"), garbage);
+  if (outlier) setRows($("outlier_list").querySelectorAll(".row"), outlier);
+}
+
+async function runPrefilter() {
+  $("runbtn").disabled = true;
+  try {
+    const res = await fetch("/api/run", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(collectKnobs()),
+    });
+    const data = await res.json();
+    $("textout").value = data.text;
+  } catch (err) {
+    $("textout").value = "Error: " + err;
+  } finally {
+    $("runbtn").disabled = false;
+  }
+}
+
+async function runEmbedding() {
+  $("embedbtn").disabled = true;
+  $("embedbtn").textContent = "Embedding…";
+  try {
+    const res = await fetch("/api/embed", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(collectKnobs()),
+    });
+    const data = await res.json();
+    $("textout").value = data.text;
+  } catch (err) {
+    $("textout").value = "Error: " + err;
+  } finally {
+    $("embedbtn").disabled = false;
+    $("embedbtn").textContent = "Run Embedding";
+  }
+}
+
+$("runbtn").addEventListener("click", runPrefilter);
+$("autobtn").addEventListener("click", runAuto);
+$("embedbtn").addEventListener("click", runEmbedding);
+loadConfig();
+</script>
+</body>
+</html>

@@ -33,7 +33,8 @@ def snapshot_exists(output_dir: str | Path) -> bool:
 
 
 def generate_snapshot(output_dir: str | Path, data_root: str, embedding: str = DEFAULT_EMBEDDING,
-                      embedding_model: str = DEFAULT_EMBEDDING_MODEL, auto_thresholds: bool = True):
+                      embedding_model: str = DEFAULT_EMBEDDING_MODEL, auto_thresholds: bool = True,
+                      cfg_override=None):
     """Generate the explorer snapshot in ``output_dir`` from ``data_root``.
 
     Runs the same pre-filter + quality-scoring + embedding stages as
@@ -42,18 +43,14 @@ def generate_snapshot(output_dir: str | Path, data_root: str, embedding: str = D
     ``quality.csv`` (aligned by sample id) and a ``report.json`` with the
     ``data_root`` / embedding settings, which is exactly the snapshot
     ``load_snapshot`` reads.
+
+    ``cfg_override`` is an optional hook ``callable(cfg) -> cfg`` applied right
+    after the pipeline config is built (before the dataset is loaded); the
+    pre-filter tuning app uses it to inject the currently-tuned threshold
+    knobs.  Returning ``None`` keeps the original config.
     """
     from config import PipelineConfig
     from data_io.dataset import Dataset
-    from run import (
-        apply_soft_filters,
-        build_embedding_model,
-        build_filters,
-        build_quality_scorer,
-        build_soft_filters,
-    )
-    from tqdm import tqdm
-    from utils.threshold_tuner import tune_thresholds
 
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -65,11 +62,33 @@ def generate_snapshot(output_dir: str | Path, data_root: str, embedding: str = D
         embedding_model=embedding_model,
         auto_thresholds=auto_thresholds,
     )
+    if cfg_override is not None:
+        cfg = cfg_override(cfg) or cfg
 
     print(f"Generating snapshot in {output_dir} from {cfg.data_root} ...")
     dataset = Dataset(cfg.data_root)
     dataset.load_images()
     print(f"Loaded {len(dataset)} observations")
+
+    _write_snapshot(cfg, dataset, output_dir)
+
+
+def _write_snapshot(cfg, dataset, output_dir: Path):
+    """Pre-filter + quality + embedding for ``dataset`` and write the snapshot.
+
+    Shared by ``generate_snapshot`` (explorer auto-generation) and the
+    pre-filter tuning app's "Run Embedding" button — both only differ in how
+    the pipeline config is built.
+    """
+    from run import (
+        apply_soft_filters,
+        build_embedding_model,
+        build_filters,
+        build_quality_scorer,
+        build_soft_filters,
+    )
+    from tqdm import tqdm
+    from utils.threshold_tuner import tune_thresholds
 
     tuned = {}
     if cfg.auto_thresholds:
@@ -133,7 +152,7 @@ def generate_snapshot(output_dir: str | Path, data_root: str, embedding: str = D
         "embedding_model": cfg.embedding_model,
     }
     (output_dir / "report.json").write_text(json.dumps(report, indent=2))
-    print(f"Snapshot ready: {len(pool)} samples embedded with {embedding_model}")
+    print(f"Snapshot ready: {len(pool)} samples embedded with {cfg.embedding_model}")
 
 
 def load_snapshot(output_dir: str | Path):
