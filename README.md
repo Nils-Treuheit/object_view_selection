@@ -86,6 +86,9 @@ python -m embedding_explorer_tool.webapp --output_dir ./outputs
 # Tune the pre-filter thresholds on a dataset, preview the accept/reject
 # outcome, then run the embedding (feeds the explorer's snapshot)
 python -m embedding_explorer_tool.prefilter_app
+
+# Or start both together (tuner on 8520, explorer on 8510)
+python run_webapps.py -i /path/to/dataset -o ./outputs_embedding_explorer
 ```
 
 ## Testing

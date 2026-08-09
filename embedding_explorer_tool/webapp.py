@@ -62,12 +62,22 @@ class ExplorerState:
                 auto_thresholds=auto_thresholds,
             )
         snapshot = algorithms.load_snapshot(self.output_dir)
+        self.data_root = Path(data_root) if data_root else None
+        self._load_snapshot()
+
+        self._mds_lock = threading.Lock()
+        self._mds_coords = None
+        self._composite_cache = {}
+
+    def _load_snapshot(self):
+        """Read the snapshot files + image/mask maps (data_root-resolving)."""
+        snapshot = algorithms.load_snapshot(self.output_dir)
         self.embeddings = snapshot["embeddings"]
         self.pool_ids = snapshot["pool_ids"]
         self.quality = snapshot["quality"]
         self.selected_ids = snapshot.get("selected_ids")
 
-        root = Path(data_root) if data_root else Path(snapshot.get("data_root") or "")
+        root = self.data_root or Path(snapshot.get("data_root") or "")
         if not (root / "images").is_dir():
             raise FileNotFoundError(
                 f"Dataset root {root} has no images/ directory. Pass --data_root."
@@ -76,9 +86,17 @@ class ExplorerState:
         self.images = {int(p.stem): p for p in (root / "images").glob("*.png")}
         self.masks = {int(p.stem): p for p in (root / "masks").glob("*.png")}
 
-        self._mds_lock = threading.Lock()
-        self._mds_coords = None
-        self._composite_cache = {}
+    def reload(self):
+        """Re-read the snapshot + image maps after the tuner regenerated them.
+
+        Invalidates the cached MDS projection and composited frames so the next
+        ``/api/run`` reflects the new pool.
+        """
+        with self._mds_lock:
+            self._load_snapshot()
+            self._mds_coords = None
+            self._composite_cache = {}
+        return {"pool": len(self.pool_ids), "data_root": str(self.data_root)}
 
     def get_coords(self):
         with self._mds_lock:
@@ -150,6 +168,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self._serve_index()
             if path == "/static/plotly.min.js":
                 return self._serve_file(PLOTLY_PATH, "application/javascript")
+            if path == "/api/reload":
+                payload = self.state.reload()
+                body = json.dumps(payload).encode("utf-8")
+                return self._send(200, body, "application/json")
             if path.startswith("/api/run"):
                 return self._serve_api(parsed.query)
             if path.startswith("/composite/"):

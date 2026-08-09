@@ -51,6 +51,7 @@
     </label>
     <label>xNN k <input id="x_input" type="number" min="1" value="3"></label>
     <button id="run_btn">Run</button>
+    <button id="reload_btn">Reload Snapshot</button>
     <span id="dims_switch">
       <button id="dims_2d" class="active">2D</button>
       <button id="dims_3d">3D</button>
@@ -123,7 +124,22 @@ function onHover(ev) {
 }
 
 document.getElementById("run_btn").addEventListener("click", run);
+document.getElementById("reload_btn").addEventListener("click", reloadSnapshot);
 document.getElementById("show_btn").addEventListener("click", function () { showFrame(); });
+
+async function reloadSnapshot() {
+  textOut.textContent = "Reloading snapshot…";
+  try {
+    const resp = await fetch("/api/reload");
+    if (!resp.ok) throw new Error("HTTP " + resp.status);
+    const data = await resp.json();
+    textOut.textContent = "Snapshot reloaded: " + data.pool + " samples (data_root " +
+      data.data_root + ").";
+    run();
+  } catch (err) {
+    textOut.textContent = "Reload failed: " + err;
+  }
+}
 document.getElementById("frameid_input").addEventListener("keydown", function (e) {
   if (e.key === "Enter") showFrame();
 });

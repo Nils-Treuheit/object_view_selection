@@ -250,8 +250,8 @@ def run_embedding(data_root, output_dir, garbage=None, outlier=None):
 
     generate_snapshot(output_dir, data_root, auto_thresholds=False, cfg_override=cfg_override)
     return (f"Embedding snapshot written to {output_dir} "
-            f"(data_root={data_root}). Reload the embedding explorer "
-            f"(default port 8510) to see the new pool.")
+            f"(data_root={data_root}). Click 'Reload Snapshot' in the "
+            f"embedding explorer (default port 8510) to see the new pool.")
 
 
 # --------------------------------------------------------------------------- #
