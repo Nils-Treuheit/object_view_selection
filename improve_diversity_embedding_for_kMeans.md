@@ -1,174 +1,294 @@
-# Plan: Improve Diversity Embedding for kMeans (descriptor-based diversity + rotational embeddings)
+# Plan: Improve Diversity for kMeans Selection (silhouette-relative-scaled diversity)
 
-> **Status: PLAN ONLY — no implementation.** This document explores two ways to make
-> object views land in a more useful semantic space before kMeans clustering:
-> (1) descriptor-based diversity blended into the quality-diversity selector, and
-> (2) rotational embeddings that make the learned (DINOv3/SigLIP2) features rotation-aware.
-> Nothing here is implemented; this is a design proposal to review before coding.
+> **Status: PLAN ONLY — no implementation.** The approach is decided: **relative
+> scaling with a silhouette-descriptor divergence score** applied to the
+> `top_kmeans_xnn` selector. We process kMeans clusters in order of **descending
+> average quality**, start each group's pick from its **highest-quality xNN
+> candidate**, then **scale the embedding-cosine diversity term by the (relative)
+> silhouette divergence** to the already-picked views before scoring the next
+> group. Nothing here is implemented yet.
 
 ---
 
-## 1. Motivation
+## 1. Decision
+
+For the kMeans selection improvement we **do NOT** take the rotational-embedding
+route and we **do NOT** additively blend descriptors into the global GQD score.
+Instead we keep the frozen learned embeddings as the clustering space and inject
+the silhouette-descriptor divergence **multiplicatively** as a *relative scaling
+factor* on the diversity term, cluster by cluster:
+
+```
+scaled_diversity(i) = relative_divergence(i)  ·  embedding_cosine_distance(i, selected)
+```
+
+- `relative_divergence(i)` ∈ (0, 1] — the silhouette divergence of candidate `i`
+  to the already-picked views, normalized across its own xNN candidate group
+  (so the *most* divergent candidate in the group keeps the full diversity score,
+  and a candidate whose silhouette matches an already-picked view is down-weighted).
+- `embedding_cosine_distance(i, selected)` — the embedding-space diversity term
+  (distance to the nearest selected view), exactly as the current selector uses it.
+
+The rationale for multiplying rather than adding: the learned embeddings are
+"semantically" similar for near-duplicate poses, so an embedding distance can be
+*large or small for the wrong reasons*. The silhouette divergence provides a
+relative correction factor that only matters when it is small — it can suppress
+a candidate whose geometry repeats an already-chosen view, but it never inflates
+diversity on its own. Addition would let the descriptor dominate; multiplication
+keeps the embedding space in charge and uses the descriptor to *reweight* it.
+
+---
+
+## 2. Motivation
 
 The `top_kmeans_xnn` selector clusters object views with kMeans in the embedding
-space produced by a frozen vision backbone. Two weaknesses show up in practice:
+space of a frozen vision backbone (DINOv3/SigLIP2), then picks the best-quality
+sample in the `xNN` neighbourhood of each centroid. Two weaknesses show up in
+practice:
 
-1. **Learned embeddings are scale/shape agnostic at the cluster level.**
-   DINOv3/SigLIP2 are trained for semantic understanding (object identity, parts),
-   not for *pose/viewpoint* discrimination. Two views of the same object taken from
-   nearby cameras often land closer together in the embedding than two *different*
-   views that would be far more informative for a reconstruction/onboarding task.
-   kMeans then collapses near-duplicate views into one cluster.
+1. **Learned embeddings underweight viewpoint/geometry.** They are trained for
+   semantic identity, not pose. Near-duplicate views cluster together while
+   genuinely novel angles may sit close in the embedding. The xNN neighbourhood
+   can therefore contain views that are *geometrically* redundant even though
+   their embedding distance looks "diverse".
+2. **kMeans order is quality-blind for diversity.** Clusters are ranked by
+   average quality, but the within-group pick only looks at quality + plain
+   embedding distance. It never checks whether the next pick's *shape* repeats an
+   already-selected view.
 
-2. **The learned embeddings are not rotation-equivariant.**
-   Rotating the object in the image can push a view to a distant region of the
-   embedding space even though it adds no new information, while a genuinely novel
-   angle stays embedded close to a already-seen one.
-
-Both issues dilute the "diversity" signal that selection algorithms rely on, so the
-selected views are less diverse (in a geometric/silhouette sense) than the embedding
-space suggests.
-
----
-
-## 2. Existing state
-
-### 2.1 What is already implemented
-
-- `selection/greedy_quality_diversity.py` — GQD selector supporting:
-  - `diversity_mode` = `"min" | "max" | "prototype"` (how distance to the selected set is aggregated),
-  - `use_descriptors` / `descriptor_weight` — blends a **descriptor divergence** matrix
-    with the embedding cosine distance in the diversity term.
-- `descriptors/silhouette.py` — `silhouette_descriptor(mask, size=64)` (binarize → bbox crop →
-  square pad → resize → L2-normalise) and `silhouette_divergence(a, b)` (cosine distance).
-- `run.py` — `--selector_use_descriptors`, `--selector_descriptor_weight`,
-  `--selector_descriptor` (silhouette | hu | zernike | fourier | shape_context),
-  `--selector_diversity_mode`; descriptor scores computed in `run_pipeline` and passed to `selector.select(...)`.
-- `selection/kmeans_xnn.py` — kMeans over embeddings with `kmeans_init`
-  (`best_quality` | `farthest`) and `kmeans_xnn_k` neighbourhood.
-- `config.py` — `PipelineConfig` fields: `selector_diversity_mode`, `selector_use_descriptors`,
-  `selector_descriptor_weight`, `selector_descriptor`, plus the kMeans flags.
-
-### 2.2 Where the plan would plug in
-
-| Stage | File | Hook point |
-|-------|------|------------|
-| Descriptor computation | `run.py` → `extract_shape_descriptor` | already returns per-view descriptor vectors |
-| Diversity in selection | `selection/greedy_quality_diversity.py` | `silhouette_scores` arg already wired |
-| kMeans input space | `selection/kmeans_xnn.py` | currently receives only `embeddings` |
-| Embedding extraction | `run.py` → `extract_embeddings` | produces `obs.embedding` from the backbone |
+Silhouette descriptors (`descriptors/silhouette.py`) are cheap (binarize → bbox
+crop → resize → L2-normalize), rotation-information-preserving, and computed from
+the same masks the pipeline already produces — so they give us a per-view
+*geometric* signal for free. This plan uses them as a **relative scale** on the
+embedding diversity term of the kMeans-xNN selection.
 
 ---
 
-## 3. Option A — Descriptor-based diversity for GQD (partially implemented)
+## 3. Existing state (what this builds on)
 
-### 3.1 What is already done
+Already implemented and wired:
 
-The GQD selector can already blend a per-view **silhouette divergence** matrix into its
-diversity term:
+| Piece | File | Status |
+|-------|------|--------|
+| `silhouette_descriptor(mask, size=64)` (binarize → bbox crop → square pad → resize → L2-norm 4096-d) | `descriptors/silhouette.py` | implemented |
+| `silhouette_divergence(a, b)` = cosine distance; `0.0` on empty/norm-0 | `descriptors/silhouette.py` | implemented |
+| `extract_shape_descriptor(obs, "silhouette")` returns the descriptor vector | `run.py` | implemented |
+| `TopKMeansXNN(init=..., k=..., xnn_k=...)` — kMeans + per-cluster xNN + best-quality pick + fill-up | `selection/kmeans_xnn.py` | implemented (unchanged by this plan) |
+| Descriptor scores computed in `run_pipeline` for the GQD path | `run.py` | implemented (GQD only, see §6) |
+
+The plan **extends `TopKMeansXNN`** with an optional diversity-scaling mode. The
+existing behaviour must remain the default so current runs/tests keep passing.
+
+---
+
+## 4. The algorithm in detail
+
+### 4.1 Inputs
+
+- `embeddings` — (N, D) pool embeddings (learned, unchanged).
+- `quality` — (N,) per-view quality scores.
+- `silhouettes` — (N, d) per-view silhouette descriptor vectors.
+- `k` — number of kMeans clusters (default `num_views`).
+- `xnn_k` — xNN neighbourhood radius (default 10).
+- `alpha`, `beta` — quality vs diversity weights (reuse `selector_alpha`/`selector_beta`).
+
+### 4.2 Step-by-step
+
+1. **Cluster.** Run kMeans on `embeddings` → `k` clusters `C_1..C_k` with centroids `μ_j`.
+2. **Rank clusters.** Compute each cluster's average quality `Q_j = mean(quality in C_j)`;
+   sort clusters in **descending** order of `Q_j` → processing order.
+3. **First group (highest average quality).** Build the xNN candidate set of cluster `C_1`:
+   `G_1 = {μ_1} ∪ xNN(μ_1)` (the x pool samples nearest to `μ_1` in embedding cosine
+   distance). **Pick the highest-quality candidate in `G_1`** as the first selection. `P = {p_1}`.
+4. **For each subsequent cluster `C_j` in rank order** (i.e. the "next highest xNN group"):
+   a. Build `G_j = {μ_j} ∪ xNN(μ_j)`.
+   b. For every candidate `i ∈ G_j` (excluding any already-selected pool index):
+      - **Divergence:** `div(i) = mean over p ∈ P of silhouette_divergence(s_i, s_p)`
+        (candidate's geometric distance to the set of already-picked views).
+      - **Relative scale:** `r(i) = div(i) / max_{i' ∈ G_j} div(i')`  (relative scaling;
+        the most-divergent candidate in the group keeps scale `1.0`, values ∈ (0, 1]).
+      - **Embedding diversity:** `d_emb(i) = min over p ∈ P of cosine_dist(e_i, e_p)`
+        (nearest already-picked view in the embedding space).
+      - **Scaled diversity:** `D(i) = r(i) · d_emb(i)`.
+      - **Score:** `score(i) = alpha · quality(i) + beta · D(i)`.
+   c. **Pick `argmax_i score(i)`**, add to `P`.
+5. **Fill-up** (only if `num_views > k`): after all `k` clusters contributed one pick,
+   draw the remaining best-quality samples per cluster (highest average quality first),
+   skipping already-selected indices — the existing fill-up logic unchanged.
+
+If `num_views <= k`, stop after processing the top `num_views` clusters.
+
+### 4.3 Pseudocode
+
+```python
+from descriptors.silhouette import silhouette_divergence
+from sklearn.metrics import pairwise_distances
+
+labels, centroids = kmeans(embeddings, k, init=init)          # step 1
+
+Q = [quality[labels == j].mean() for j in range(k)]
+cluster_order = np.argsort(Q)[::-1]                            # step 2 (desc avg quality)
+
+def xnn_group(j):
+    d = pairwise_distances(centroids[j:j+1], embeddings, metric="cosine").ravel()
+    nn = np.argsort(d)[:xnn_k]                                 # nearest x pool samples
+    return np.unique(np.concatenate([nn, [np.argmin(d)]]))     # {centroid-sample} ∪ xNN
+
+emb_dist = pairwise_distances(embeddings, metric="cosine")
+sil_dist = pairwise_distances(silhouettes, metric="cosine")    # precompute divergence matrix
+
+P = []
+for pos, j in enumerate(cluster_order):
+    G = xnn_group(j)
+    G = [i for i in G if i not in P]
+    if not G:
+        continue
+    if pos == 0:
+        pick = G[np.argmax(quality[G])]                        # step 3: highest-quality xNN candidate
+    else:
+        div = sil_dist[G][:, P].mean(axis=1)                   # step 4b: divergence to picked views
+        r = div / (div.max() + EPS)                            # step 4b: relative scale
+        d_emb = emb_dist[G][:, P].min(axis=1)                  # step 4b: embedding diversity
+        D = r * d_emb                                          # step 4b: scaled diversity
+        score = alpha * quality[G] + beta * D
+        pick = G[np.argmax(score)]
+    P.append(int(pick))
+
+if len(P) < num_views:
+    P += fill_up(quality, labels, cluster_order, exclude=P)    # step 5 (existing logic)
+```
+
+### 4.4 Worked micro-example
+
+Three clusters, processing order by average quality: `C_1 (Q=0.9)`, `C_2 (Q=0.5)`,
+`C_3 (Q=0.2)`. `alpha = 0.6`, `beta = 0.4`.
+
+- `C_1` xNN group `{a, b, c}`, qualities `{0.95, 0.80, 0.70}` →
+  **first pick `a`** (highest quality). `P = {a}`.
+- `C_2` xNN group `{d, e}`, qualities `{0.60, 0.55}`.
+
+  | candidate | `quality` | `div` (silh. to a) | `r = div/max` | `d_emb` (cos to a) | `D = r·d_emb` | `score` |
+  |---|---|---|---|---|---|---|
+  | `d` | 0.60 | 0.80 | 1.00 | 0.10 | 0.10 | 0.6·0.60 + 0.4·0.10 = **0.40** |
+  | `e` | 0.55 | 0.20 | 0.25 | 0.50 | 0.125 | 0.6·0.55 + 0.4·0.125 = **0.38** |
+
+  → **pick `d`**: `e` is farther in the embedding (0.50 vs 0.10) but its
+  silhouette repeats the already-picked shape, so the relative scale `0.25`
+  collapses its diversity advantage. Without scaling, `e` (score 0.53) would win —
+  exactly the failure the plan fixes.
+
+- `C_3` then evaluates against `P = {a, d}` using
+  `div(i) = mean(silh-divergence to a, to d)`, scaled within its own group.
+
+### 4.5 Parameter and aggregation choices (tunable, defaults proposed)
+
+| Decision | Proposed default | Alternative |
+|----------|------------------|-------------|
+| Diversity aggregation over `P` | `min` embedding distance (`d_emb`) | `mean`, `prototype` |
+| Divergence aggregation over `P` | `mean` silhouette divergence (`div`) | `min`, `max` |
+| Relative normalization | `div / max(div in group)` | `div / (div_first + eps)`, raw `div` (no norm), percentile |
+| Weighting | `alpha·quality + beta·scaled_div` (reuse `selector_alpha/beta`) | pure diversity in later clusters, `beta` ramp-up |
+| Descriptor | silhouette | hu, zernike, fourier, shape_context (via `extract_shape_descriptor`) |
+
+### 4.6 Config / CLI additions (proposed — not implemented)
+
+Extend the existing selector rather than adding a new one:
+
+| Flag / field | Default | Meaning |
+|--------------|---------|---------|
+| `--kmeans_diversity_scale` / `cfg.kmeans_diversity_scale` | `none` | `none` (current behaviour) or `silhouette` (enable relative scaling) |
+| `--kmeans_descriptor` / `cfg.kmeans_descriptor` | `silhouette` | descriptor family for the divergence term |
+| `--kmeans_diversity_alpha` / `cfg.kmeans_diversity_alpha` | `0.60` | quality weight (defaults to `selector_alpha`) |
+| `--kmeans_diversity_beta` / `cfg.kmeans_diversity_beta` | `0.40` | diversity weight (defaults to `selector_beta`) |
+
+In `selection/kmeans_xnn.py`, `TopKMeansXNN.select(..., silhouette_scores=None)`
+already accepts the descriptor matrix (signature was extended); the scaling logic
+is a new optional branch guarded by `diversity_scale == "silhouette"`.
+
+### 4.7 Edge cases
+
+- **Empty cluster / no candidates** — skip (continue).
+- **Candidate already selected** — a pool sample can belong to several xNN groups;
+  exclude already-picked indices from `G_j` (pseudocode above).
+- **All-zero divergences** (duplicate/empty silhouettes) — `max(div)` ≈ 0; guard with
+  `+ EPS`, so `r ≈ 1` and the mode degrades to the current pure-embedding behaviour
+  rather than crashing or zeroing every score.
+- **`num_views < k`** — process only the top `num_views` clusters.
+- **`num_views > k`** — one pick per cluster, then existing fill-up.
+- **Descriptor extraction failure (empty mask)** — `silhouette_descriptor` returns a
+  zero-norm vector → `silhouette_divergence = 0.0` → candidate gets `r ≈ small`;
+  this is safe but should be logged.
+
+---
+
+## 5. Relationship to the already-implemented GQD descriptor blending
+
+The GQD selector (already implemented) *additively* blends descriptors into the
+diversity term of the **global** quality-diversity pass:
 
 ```
-score[i] = alpha · quality[i]
-         + beta · [ (1 - w) · min_cos(emb_i, selected)
-                    + w · min_cos(desc_i, selected) ]
+GQD:  diversity = (1 - w)·emb_cos + w·sil_div
 ```
 
-With `w = 1.0` the embedding space is ignored for diversity and the selector picks purely
-by silhouette dissimilarity (useful for reconstruction/onboarding where view geometry matters).
-With `0 < w < 1` both spaces contribute.
+This plan is a **different mechanism for the kMeans selector**:
 
-### 3.2 What is NOT yet implemented (candidate follow-ups)
+| | GQD blending (implemented) | kMeans relative scaling (this plan) |
+|---|---|---|
+| Selector | `quality_diversity` | `top_kmeans_xnn` |
+| Combine descriptors | additive blend, weight `w` | multiplicative relative scale `r ∈ (0,1]` |
+| Ordering | one global greedy pass | cluster-by-cluster, descending average quality |
+| Start | highest-quality sample | highest-quality xNN candidate of the top cluster |
+| Embedding stays in charge? | only if `w` small | yes — descriptors only *reweight* |
 
-- **Descriptor-weighted kMeans.** `kmeans_xnn.py` still clusters on raw embeddings only.
-  Proposal: allow a blended feature
-  `f_i = concat((1-w)·normalise(emb_i), w·normalise(desc_i))` before kMeans (optionally
-  whitened). This makes clusters separate on both semantics and geometry.
-- **More descriptor families** (beyond silhouette):
-  - **Zernike moments** (`descriptors`-style module): rotation-invariant image moments —
-    good for global shape; loses pose information on purpose.
-  - **Fourier boundary descriptors**: order-normalised Fourier coefficients of the contour
-    (works from the mask; same input as silhouette).
-  - **Hu moments**: classic invariant moments; cheap but less discriminative.
-  - **HOG over the mask/object-hand**: captures pose/limb layout.
-- **Per-cluster prototype descriptor**: after kMeans, report each cluster's mean
-  silhouette/descriptor vector in the explorer so the user sees *why* views grouped.
-
-### 3.3 Verification plan
-
-- Unit tests asserting blended-diversity changes cluster membership vs pure embedding kMeans
-  on a synthetic dataset (e.g. 4 rotating silhouettes + 4 near-duplicate semantic views).
-- Metric: silhouette coefficient of the chosen views *in each space* (embedding, descriptor),
-  plus a "novel view" heuristic — mean descriptor divergence within the selected set.
+Both can coexist: GQD governs the global pass; the kMeans mode governs
+cluster-wise selection.
 
 ---
 
-## 4. Option B — Rotational embeddings (bigger change, not implemented)
+## 6. Deferred: rotational embeddings
 
-### 4.1 Idea
-
-Make the backbone features rotation-aware by combining a base embedding with an explicit
-**rotation estimate**, so kMeans/GQD distances reflect *viewpoint* differences, not just
-semantic identity.
-
-### 4.2 Candidate approaches
-
-1. **Image-level rotational augmentation embedding.**
-   Extract `e = backbone(image)` for the image and for K rotated copies
-   (0°, 90°, 180°, 270°), then build a rotation-aligned descriptor:
-   ```
-   e_rot = concat( R(0)·e0 , R(90)·e1 , ... )   (R = rotation of feature map / re-sort of tokens)
-   ```
-   Discriminative in *relative* orientation. Cost: K forward passes.
-
-2. **Relative-rotation head (RotNet-style).**
-   Train a small MLP on the backbone features to predict the rotation angle between
-   two views of the same object; use `|Δθ|` as an extra diversity signal added to the
-   GQD/kMeans distance. Requires a per-object paired-view training set (available in
-   the dataset: all views are already aligned by filename).
-
-3. **Canonical-pose alignment (lift to a canonical frame).**
-   Use the silhouette/`object_hands` segmentation to rotate the mask into a canonical
-   orientation (PCA of the mask or the hands skeleton), then embed the aligned image.
-   Two views of the same pose collapse to the same embedding; genuinely different poses
-   stay separated. This is the most "physics-aware" option and works on the mask without
-   any training.
-
-### 4.3 Trade-offs
-
-| Approach | Training needed | Extra forward passes | Pose discriminative | Risks |
-|----------|----------------|----------------------|---------------------|-------|
-| Rotational augmentation | none | K (e.g. 4) | relative only | 4× embedding cost; absolute orientation ambiguous |
-| RotNet head | small (per object or dataset) | 0 (inference) | absolute/relative | needs labels; may overfit to the training set |
-| Canonical-pose alignment | none | 0 | absolute (via mask) | depends on mask/hands quality; PCA sign ambiguity |
-
-### 4.4 Verification plan
-
-- Ablation on a held-out object: for each of 3 views with known angular separation,
-  measure embedding cosine distance before/after the rotation-aware step; expect
-  monotonic increase of distance with angular separation.
-- Re-run the `top_kmeans_xnn` selection with and without the rotation-aware embedding;
-  compare the selected set's mean silhouette-divergence (from Option A) — the rotation-aware
-  set should be strictly more diverse.
+Not part of this plan. The earlier candidate "rotational embeddings"
+(rotational augmentation, RotNet head, canonical-pose alignment) is parked — the
+silhouette-relative scaling is simpler, training-free and reuses existing
+descriptors. Revisit only if the scaled-diversity gains plateau and pose-angle
+discrimination is still insufficient.
 
 ---
 
-## 5. Recommended sequencing
+## 7. Verification plan (before merging, after implementation)
 
-1. **Land Option A for kMeans** (blended descriptor features in `kmeans_xnn.py`) — small,
-   well-contained, reuses the already-wired silhouette descriptors.
-2. **Add the explorer view** of per-cluster prototype descriptors (visibility of the change).
-3. **Prototype Option B3 (canonical-pose alignment)** on the `object_hands`/mask data — no
-   training, most likely to produce a *useful* rotation-aware space for viewpoint-diverse
-   selection. If its silhouette-divergence gain is large, then evaluate B1/B2 for
-   multi-view reconstruction tasks.
+1. **Unit tests** (`tests/correctness_test_units/test_selection_algorithms.py`):
+   - Synthetic data where two xNN candidates have near-equal embedding distance to
+     the first pick but very different silhouette divergences → assert the *scaled*
+     mode picks the silhouette-novel one and the *unscaled* mode picks the other.
+   - Assert `diversity_scale="none"` reproduces the current `TopKMeansXNN` output
+     exactly (backward compatibility).
+   - Assert first pick = highest-quality candidate of the highest-average-quality
+     cluster's xNN group; clusters processed in descending average quality.
+   - Assert already-selected samples are never re-picked; `num_views < k` and
+     `num_views > k` fill-up behave.
+2. **Descriptor checks** — the relative scale is `≤ 1` for every candidate
+   (so scaled diversity never exceeds embedding diversity).
+3. **End-to-end** on a real dataset:
+   - Selected-set **mean silhouette divergence** must be `≥` the unscaled baseline
+     (the core claim).
+   - Embedding coverage (mean min-distance of the pool to the selected set) must not
+     regress.
+4. **Full correctness suite** must stay green (855 assertions today).
 
 ---
 
-## 6. Open questions for review
+## 8. Open questions
 
-- Should descriptor blending in kMeans be a separate `--kmeans_use_descriptors` flag or reuse
-  `--selector_use_descriptors`? (Suggest a separate flag; the two stages have different goals.)
-- Should the rotational embedding be a *new embedding type* (`--embedding rot_siglip2`) or an
-  *augmentation layer* applied after any backbone? (Suggest the latter — composition is cleaner.)
-- Does the exploratory dataset have enough views per object (with known relative pose) to train
-  a RotNet head? If not, drop Option B2.
+- **Relative normalization reference**: normalize by the group max (proposed) or by
+  the first pick's own divergence (a fixed reference, keeps the scale stable across
+  groups)? Group-max is data-driven but lets one outlier candidate lift everyone's
+  scale; fixed-reference is stable but needs an `eps` floor.
+- **Within-group candidate set**: should `G_j` include the *centroid sample* (the
+  cluster's actual member nearest to `μ_j`) as today, or all cluster members?
+- **Divergence aggregation over `P`**: `mean` (proposed) or `min` (the strongest
+  repeat — most conservative)?
+- **Weight schedule**: constant `beta`, or ramp `beta` up in later (lower-quality)
+  clusters so diversity matters more once the high-quality clusters are consumed?
+- **`k` vs `num_views`**: when `k < num_views`, should the fill-up stage also apply
+  relative scaling, or keep the plain best-quality fill-up?
