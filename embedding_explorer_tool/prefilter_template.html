@@ -108,6 +108,10 @@
   <div id="main">
     <div id="left">
       <div class="section">
+        <h2>Filter Parameters <span class="count" id="params_count"></span></h2>
+        <div id="params_list"></div>
+      </div>
+      <div class="section">
         <h2>Garbage Thresholds <span class="count" id="garbage_count"></span></h2>
         <div id="garbage_list"></div>
       </div>
@@ -128,7 +132,21 @@
 
 <script>
 const $ = (id) => document.getElementById(id);
-let state = { garbage: {}, outlier: {} };
+let state = { garbage: {}, outlier: {}, params: {} };
+
+function addParamRow(meta) {
+  const div = document.createElement("div");
+  div.className = "row";
+  div.dataset.key = meta.key;
+  const label = document.createElement("label");
+  label.textContent = meta.label;
+  const input = document.createElement("input");
+  input.type = "number";
+  input.min = meta.min; input.max = meta.max; input.step = meta.step;
+  input.value = meta.value;
+  div.append(label, input);
+  $("params_list").appendChild(div);
+}
 
 function addGarbageRow(meta) {
   const div = document.createElement("div");
@@ -164,6 +182,10 @@ function addOutlierRow(meta) {
 }
 
 function collectKnobs() {
+  const readNumeric = (row) => {
+    const input = row.querySelector("input");
+    return input.step == 1 ? parseInt(input.value) : parseFloat(input.value);
+  };
   const garbage = {};
   $("garbage_list").querySelectorAll(".row").forEach((row) => {
     garbage[row.dataset.key] = parseFloat(row.querySelector("input").value);
@@ -175,15 +197,21 @@ function collectKnobs() {
       value: parseFloat(row.querySelector("input[type=number]").value),
     };
   });
-  return { garbage, outlier };
+  const params = {};
+  $("params_list").querySelectorAll(".row").forEach((row) => {
+    params[row.dataset.key] = readNumeric(row);
+  });
+  return { garbage, outlier, params };
 }
 
 async function loadConfig() {
   const res = await fetch("/api/config");
   const data = await res.json();
   $("meta").textContent = `${data.data_root} · ${data.n_observations} observations`;
+  data.knobs.params.forEach(addParamRow);
   data.knobs.garbage.forEach(addGarbageRow);
   data.knobs.outlier.forEach(addOutlierRow);
+  $("params_count").textContent = `(${data.knobs.params.length})`;
   $("garbage_count").textContent = `(${data.knobs.garbage.length})`;
   $("outlier_count").textContent = `(${data.knobs.outlier.length})`;
   state = collectKnobs();
@@ -195,7 +223,7 @@ async function runAuto() {
   try {
     const res = await fetch("/api/run_auto", { method: "POST" });
     const data = await res.json();
-    applyKnobs(data.garbage, data.outlier);
+    applyKnobs(data.garbage, data.outlier, null);
     $("textout").value = data.text;
   } catch (err) {
     $("textout").value = "Error: " + err;
@@ -204,12 +232,13 @@ async function runAuto() {
   }
 }
 
-function applyKnobs(garbage, outlier) {
+function applyKnobs(garbage, outlier, params) {
   const setRows = (rows, values) => rows.forEach((row) => {
     if (row.dataset.key in values) row.querySelector("input").value = values[row.dataset.key];
   });
   if (garbage) setRows($("garbage_list").querySelectorAll(".row"), garbage);
   if (outlier) setRows($("outlier_list").querySelectorAll(".row"), outlier);
+  if (params) setRows($("params_list").querySelectorAll(".row"), params);
 }
 
 async function runPrefilter() {

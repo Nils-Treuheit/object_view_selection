@@ -66,7 +66,10 @@ def test_apply_knobs():
     apply_knobs(cfg, {"blur_laplacian.hard_min_variance": 1234.0,
                       "blur_tenengrad.hard_min_tenengrad": 55.5},
                 {"blur_laplacian.outlier_z": {"enabled": False, "value": 2.0},
-                 "vincents_artefacts.outlier_z": {"enabled": True, "value": 4.5}})
+                 "vincents_artefacts.outlier_z": {"enabled": True, "value": 4.5}},
+                {"vincents_artefacts.kernel_size": 7.0,
+                 "blur_laplacian.stroke_width": 5.0,
+                 "vincents_area.softness": 0.25})
     check(cfg.filters.blur_laplacian.hard_min_variance == 1234.0,
           "garbage knob writes hard_min_variance")
     check(cfg.filters.blur_tenengrad.hard_min_tenengrad == 55.5,
@@ -75,7 +78,14 @@ def test_apply_knobs():
           "disabled outlier knob sets z to None")
     check(cfg.filters.vincents_artefacts.outlier_z == 4.5,
           "enabled outlier knob sets z value")
-    apply_knobs(cfg, {"does.not.exist": 1.0}, {"also.missing": {"enabled": True, "value": 2.0}})
+    check(cfg.filters.vincents_artefacts.kernel_size == 7,
+          "integer parameter knob stays an int")
+    check(cfg.filters.blur_laplacian.stroke_width == 5,
+          "integer stroke_width parameter stays an int")
+    check(cfg.filters.vincents_area.softness == 0.25,
+          "float parameter knob written as float")
+    apply_knobs(cfg, {"does.not.exist": 1.0}, {"also.missing": {"enabled": True, "value": 2.0}},
+                {"no.such_param": 3})
     check(True, "unknown knob keys are ignored")
 
 
@@ -85,23 +95,39 @@ def test_config_payload():
     payload = config_payload(cfg)
     garbage = {k["key"]: k for k in payload["garbage"]}
     outlier = {k["key"]: k for k in payload["outlier"]}
+    params = {k["key"]: k for k in payload["params"]}
     check(set(garbage) == {"blur_laplacian.hard_min_variance",
                            "blur_tenengrad.hard_min_tenengrad",
-                           "vincents_artefacts.hard_max_fraction",
-                           "vincents_motion_blur.hard_min_variance",
-                           "vincents_area.hard_min_area_fraction"},
-          "garbage knobs cover the five floors/ceiling")
+                           "vincents_artefacts.hard_max_fraction"},
+          "default filter order only exposes the active floors/ceiling")
     check(set(outlier) == {"blur_laplacian.outlier_z",
                            "blur_tenengrad.outlier_z",
-                           "vincents_artefacts.outlier_z",
-                           "vincents_motion_blur.outlier_z",
-                           "vincents_area.outlier_z"},
-          "outlier knobs cover the five z-cutoffs")
+                           "vincents_artefacts.outlier_z"},
+          "default filter order only exposes the active z-cutoffs")
+    check(set(params) == {"blur_laplacian.stroke_width",
+                          "blur_tenengrad.stroke_width",
+                          "vincents_artefacts.kernel_size"},
+          "default filter order exposes the active filter parameters")
     check(all("min" in k and "max" in k and "step" in k for k in payload["garbage"]),
           "knobs carry min/max/step bounds")
     check(outlier["blur_laplacian.outlier_z"]["enabled"] is False
           and outlier["blur_laplacian.outlier_z"]["value"] == 3.0,
           "disabled outlier serialized with fallback value 3.0")
+
+    # Including the soft filters in the order exposes their knobs too.
+    cfg.filters.filter_order = list(cfg.filters.filter_order) + ["vincents_area", "vincents_motion_blur"]
+    payload = config_payload(cfg)
+    keys = {k["key"] for k in payload["garbage"]}
+    out_keys = {k["key"] for k in payload["outlier"]}
+    param_keys = {k["key"] for k in payload["params"]}
+    check({"vincents_area.hard_min_area_fraction",
+           "vincents_motion_blur.hard_min_variance"} <= keys,
+          "soft filters in the order add their garbage knobs")
+    check({"vincents_area.outlier_z", "vincents_motion_blur.outlier_z"} <= out_keys,
+          "soft filters in the order add their outlier knobs")
+    check({"vincents_area.softness", "vincents_motion_blur.stroke_width",
+           "vincents_motion_blur.softness"} <= param_keys,
+          "soft filters in the order add their parameter knobs")
 
 
 def test_run_prefilter_synthetic():
@@ -121,12 +147,37 @@ def test_build_report_text():
     garbage = {"blur_laplacian.hard_min_variance": 100000.0}
     text, _acc, _rej, _reasons = run_prefilter(str(root), garbage)
     check("PRE-FILTER RUN" in text, "report header present")
+    check("Filter order:" in text, "filter order section present")
     check("Garbage thresholds applied:" in text, "garbage section present")
     check("Outlier thresholds applied:" in text, "outlier section present")
+    check("Filter parameters applied:" in text, "parameters section present")
     check("Rejected by filter:" in text, "rejected section present")
     check("Accepted raw stats" in text, "stats section present")
     check("100000.0000" in text, "applied knob value shown")
     check("observations: 8" in text, "observation count shown")
+    check("kernel_size" in text, "active filter parameter shown")
+
+
+def test_filter_order_selects_filters():
+    """The soft filters only run when explicitly included in the order."""
+    root = _make_synthetic_dataset()
+    order_default = ["vincent_empty_mask", "vincent_border_pixel",
+                     "blur_laplacian", "blur_tenengrad", "vincents_artefacts"]
+    text, _acc, _rej, _reasons = run_prefilter(str(root), filter_order=order_default)
+    check("vincents_area" not in text and "vincents_motion_blur" not in text,
+          "default order runs no soft filters")
+    check("blur_laplacian stat" in text
+          and "vincents_artefacts stat" in text,
+          "default order reports its own stats")
+    check("vincents_area stat" not in text and "vincents_motion_blur stat" not in text,
+          "default order hides the soft filter stats")
+
+    order_with_soft = order_default + ["vincents_area", "vincents_motion_blur"]
+    text2, _acc2, _rej2, _reasons2 = run_prefilter(str(root), filter_order=order_with_soft)
+    check("vincents_area" in text2 and "vincents_motion_blur" in text2,
+          "soft filters appear when included in the order")
+    check("vincents_area stat" in text2 and "vincents_motion_blur stat" in text2,
+          "soft filter stats shown when included in the order")
 
 
 def test_auto_knobs():

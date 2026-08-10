@@ -58,7 +58,7 @@ bottle/
 | `--kmeans_xnn_k` | `10` | `3`, `5`, or `10` (top_kmeans_xnn) |
 | `--use_shape_descriptors` | off | CPU shape descriptors (`hu`, `zernike`, `fourier`, `shape_context`) |
 | `--filter_order` | config default | Comma-separated pre-filter order; runs ONLY the named pre-filters (including soft `vincents_area`/`vincents_motion_blur`); legacy `border,area,occlusion,confidence,completeness` for custom orders only |
-| `--no-auto-thresholds` | off | Use static config thresholds (set in `config.py`) |
+| `--auto-thresholds` | off | Opt in to data-driven threshold tuning (off by default; static config thresholds used otherwise) |
 | `--plot` / `--debug` | off | Generate diagnostic plots / verbose per-step stats |
 | `--only_pre_filter` | off | Stop after pre-filtering (dump accepted/rejected samples + `rejected.json`) |
 
@@ -85,7 +85,8 @@ python -m plotting_process.wrapper --input_dir ./outputs
 python -m embedding_explorer_tool.webapp --output_dir ./outputs
 
 # Tune the pre-filter thresholds on a dataset, preview the accept/reject
-# outcome, then run the embedding (feeds the explorer's snapshot)
+# outcome, then run the embedding (feeds the explorer's snapshot).
+# Runs the default run.py filter set; --filter_order swaps in other filters.
 python -m embedding_explorer_tool.prefilter_app
 
 # Or start both together (tuner on 8520, explorer on 8510)

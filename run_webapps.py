@@ -9,9 +9,10 @@ explorer would otherwise do on startup). Only when that is finished are the
 two servers started and the URLs printed, so both pages open with data
 ready:
 
-* tuner (port 8520) — tune the pre-filter thresholds, preview the
-  accept/reject outcome, then "Run Embedding" to regenerate the snapshot
-  with the tuned thresholds.
+* tuner (port 8520) — tune the pre-filter thresholds (default filter set =
+  the default run.py pipeline; `--filter-order` swaps in any other order),
+  preview the accept/reject outcome, then "Run Embedding" to regenerate the
+  snapshot with the tuned thresholds.
 * explorer (port 8510) — visualise the snapshot; after a tuner
   "Run Embedding", click "Reload Snapshot" to see the new pool.
 
@@ -66,7 +67,7 @@ def wait_ready(explorer_port, tuner_port):
 def init_snapshot(data_root, output_dir, force=False):
     """Run the pre-filter + embedding init once so both pages start with data.
 
-    Uses auto-tuned thresholds (same as the explorer's own auto-generation);
+    Uses static config thresholds (auto-tuning off, the pipeline default);
     skipped when ``output_dir`` already holds a snapshot (unless ``force``).
     """
     from embedding_explorer_tool.algorithms import snapshot_exists, generate_snapshot
@@ -77,7 +78,7 @@ def init_snapshot(data_root, output_dir, force=False):
         return
     print(f"Initial run: pre-filter + quality + embedding from {data_root} ...",
           flush=True)
-    generate_snapshot(output_dir, data_root, auto_thresholds=True)
+    generate_snapshot(output_dir, data_root, auto_thresholds=False)
 
 
 def main():
@@ -96,6 +97,11 @@ def main():
     parser.add_argument("--regen", action="store_true",
                         help="re-run the init pre-filter + embedding even if a "
                              "snapshot already exists")
+    parser.add_argument("--filter-order", dest="filter_order", type=str, default=None,
+                        help="comma-separated pre-filter order for the tuner (default: "
+                             "same set as the default run.py pipeline; add "
+                             "vincents_area,vincents_motion_blur to include the "
+                             "population-adapted soft filters)")
     args = parser.parse_args()
 
     signal.signal(signal.SIGINT, signal.default_int_handler)
@@ -119,7 +125,8 @@ def main():
          + (["--no-browser"] if args.no_browser else [])),
         ("tuner", [sys.executable, "-m", "embedding_explorer_tool.prefilter_app",
                    "--data_root", data_root, "--output_dir", output_dir,
-                   "--port", str(args.tuner_port)]),
+                   "--port", str(args.tuner_port)]
+         + (["--filter_order", args.filter_order] if args.filter_order else [])),
     ]
 
     print("  starting servers ...", flush=True)

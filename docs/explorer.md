@@ -130,8 +130,8 @@ dimmed to 66 %). The tooltip shows the sample ID and quality.
 ### Controls
 
 - **k (clusters)** — k-means `k = n`, one cluster per requested view.
-- **init** — `farthest` (deterministic farthest-point seeds, starts at the
-  highest-quality sample) or `best_quality` (top-quality seeds).
+- **init** — `best_quality` (top-quality seeds, the default) or `farthest`
+  (deterministic farthest-point seeds, starts at the highest-quality sample).
 - **xNN k** — neighbourhood radius: candidate set is
   `{centroid} ∪ its x nearest neighbours`, constrained so a candidate is only
   considered for a centroid it is closer to than to any other centroid;
@@ -149,7 +149,7 @@ constrained xNN of each centroid as a dictionary, plus the final picks and
 their qualities:
 
 ```
-k = 8   init = farthest   xNN = 5
+k = 8   init = best_quality   xNN = 10
 
 Centroid frame IDs (8):
 [111, 48, 96, 146, 41, 49, 30, 0]
@@ -171,10 +171,20 @@ The second frontend (port **8520**) is the step before the explorer: it loads a
 dataset once and lets you tune the **pre-filter** thresholds and see exactly how
 many observations pass before any embedding runs.
 
+By default it runs exactly the same pre-filter set as the default `run.py`
+pipeline — the two hard Vincent filters (empty mask, border pixel), the
+border-blur pair (`blur_laplacian`, `blur_tenengrad`) and the artifact filter.
+The population-adapted soft filters (`vincents_area`, `vincents_motion_blur`)
+are **not** shown or run unless you include them via `--filter_order`.
+
 ```bash
 python -m embedding_explorer_tool.prefilter_app
 python -m embedding_explorer_tool.prefilter_app --data_root /path/to/object \
     --output_dir ./outputs_embedding_explorer --port 8520
+
+# Add the soft filters (same semantics as run.py's --filter_order)
+python -m embedding_explorer_tool.prefilter_app \
+    --filter_order vincent_empty_mask,vincent_border_pixel,blur_laplacian,blur_tenengrad,vincents_artefacts,vincents_area,vincents_motion_blur
 ```
 
 Arguments:
@@ -184,17 +194,20 @@ Arguments:
 | `--data_root` | `.../workspace/intresting_objects/elephant` | Dataset root with `images/` and `masks/` |
 | `--output_dir` | `outputs_embedding_explorer` | Snapshot dir the explorer reads; "Run Embedding" writes here |
 | `--port` | `8520` | Local server port (one off the explorer's 8510) |
+| `--filter_order` | run.py default set | Comma-separated pre-filter order; ONLY the named filters run, knobs/params/stats are scoped to them |
 
 Layout:
 
 ```
 ┌────────────────────────────┬─────────────────────────────┐
-│ Garbage Thresholds         │  PRE-FILTER RUN (text)      │
-│  blur_laplacian floor      │  observations / accepted /  │
-│  blur_tenengrad floor      │  rejected                   │
-│  artefacts ceiling  ...    │  applied thresholds         │
-│ Outlier Thresholds         │  rejected-by-filter counts  │
-│  z-cutoff per filter       │  accepted raw stats         │
+│ Filter Parameters          │  PRE-FILTER RUN (text)      │
+│  kernel_size / stroke ...  │  observations / accepted /  │
+│ Garbage Thresholds         │  rejected                   │
+│  blur_laplacian floor      │  filter order               │
+│  blur_tenengrad floor      │  applied thresholds/params  │
+│  artefacts ceiling  ...    │  rejected-by-filter counts  │
+│ Outlier Thresholds         │  accepted raw stats         │
+│  z-cutoff per filter       │                             │
 │  (checkbox to disable)     │                             │
 ├────────────────────────────┼─────────────────────────────┤
 │ [Apply Auto Thresholds]    │  [Run Embedding]            │
@@ -202,24 +215,30 @@ Layout:
 └────────────────────────────┴─────────────────────────────┘
 ```
 
+- **Filter Parameters** — tunable filter parameters for the active filters
+  only, e.g. `vincents_artefacts.kernel_size`, `blur_laplacian.stroke_width`,
+  `blur_tenengrad.stroke_width`, and (when included) `vincents_motion_blur`
+  `stroke_width`/`softness` and `vincents_area.softness`. Integer parameters
+  use integer steps.
 - **Garbage Thresholds** — absolute floors / ceilings on the raw stats that
   reject a sample regardless of the population
-  (`hard_min_variance`, `hard_min_tenengrad`, `hard_max_fraction`,
-  motion-blur floor, area floor).
+  (`hard_min_variance`, `hard_min_tenengrad`, `hard_max_fraction`, and the
+  motion-blur floor / area floor when those filters are in the order).
 - **Outlier Thresholds** — robust population z-cutoffs
-  (`outlier_z` per filter); uncheck a row to disable that filter's outlier
-  rejection.
+  (`outlier_z` per active filter); uncheck a row to disable that filter's
+  outlier rejection.
 - **Run Pre-Filter** — runs the actual `run.py` pre-filter pipeline
   (`build_filters` + `build_soft_filters`) with the current knobs and renders
-  the outcome: applied thresholds, rejected-by-filter counts and the
-  accepted-set raw stats.
+  the outcome: filter order, applied thresholds/parameters, rejected-by-filter
+  counts and the accepted-set raw stats.
 - **Apply Auto Thresholds** — computes the data-driven thresholds
   (`utils.threshold_tuner.tune_thresholds`, the same percentile floors as
   `run.py --auto-thresholds`), writes them into the knob fields and runs the
   pre-filter with them.
 - **Run Embedding** — generates the snapshot (`algorithms.generate_snapshot`)
   with the current knobs into `--output_dir`, so a reload of the explorer
-  shows the newly-tuned selection pool.
+  shows the newly-tuned selection pool. The snapshot is always written with
+  auto-threshold tuning off, using the exact config values shown in the knobs.
 
 ## Module layout
 

@@ -217,7 +217,7 @@ Quality scores and metrics are exported to `quality.csv`.
 
 ## Stage 2.5: Auto-Threshold Tuning
 
-When `auto_thresholds: True` (default), the pipeline pre-computes thresholds from the dataset before the pre-filter runs. This tunes the **legacy** filters only.
+When `auto_thresholds: True` (opt-in via `--auto-thresholds`; off by default), the pipeline pre-computes thresholds from the dataset before the pre-filter runs. This tunes the **legacy** filters only.
 
 ### Strategy
 
@@ -238,7 +238,7 @@ The **default blur/artifact pre-filters do not need tuning**: they use static re
 
 Safety limits ensure a minimum quality bar even for garbage datasets, and prevent overly aggressive rejection on clean datasets.
 
-Disabled by passing `--no-auto-thresholds` or setting `auto_thresholds: False`.
+Enabled by passing `--auto-thresholds` or setting `auto_thresholds: True`.
 
 ### Threshold Computation Algorithm
 
@@ -517,7 +517,7 @@ All pipeline parameters are defined in `config.py`.
 | | `selector_beta` | 0.40 | Diversity weight (GQD) |
 | | `dpp_sigma` | 0.5 | Similarity bandwidth (DPP) |
 | | `num_views` | 10 | Number of views to select |
-| **Global** | `auto_thresholds` | `True` | Enable data-driven threshold tuning |
+| **Global** | `auto_thresholds` | `False` | Enable data-driven threshold tuning (off by default) |
 | | `save_visualization` | `True` | Save overview grid |
 | | `save_rejected` | `True` | Save rejected images |
 | | `save_embeddings` | `True` | Save embedding matrix |

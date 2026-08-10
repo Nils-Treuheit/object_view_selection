@@ -45,7 +45,7 @@ class ExplorerState:
     """
 
     def __init__(self, output_dir, data_root, embedding=algorithms.DEFAULT_EMBEDDING,
-                 embedding_model=algorithms.DEFAULT_EMBEDDING_MODEL, auto_thresholds=True):
+                 embedding_model=algorithms.DEFAULT_EMBEDDING_MODEL, auto_thresholds=False):
         self.output_dir = Path(output_dir)
         if not algorithms.snapshot_exists(self.output_dir):
             if not data_root:
@@ -200,8 +200,8 @@ class Handler(BaseHTTPRequestHandler):
     def _serve_api(self, query):
         params = urllib.parse.parse_qs(query)
         k = params.get("k", ["8"])[0]
-        init = params.get("init", ["farthest"])[0]
-        x = params.get("x", ["3"])[0]
+        init = params.get("init", ["best_quality"])[0]
+        x = params.get("x", ["10"])[0]
         dims = params.get("dims", ["2d"])[0]
         if dims not in ("2d", "3d"):
             dims = "3d"

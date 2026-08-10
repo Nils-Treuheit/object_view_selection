@@ -17,7 +17,7 @@ from sklearn.cluster import KMeans
 from sklearn.manifold import MDS
 from sklearn.metrics import pairwise_distances
 
-DEFAULT_XNN_K = 3
+DEFAULT_XNN_K = 10
 
 SNAPSHOT_FILES = ("embeddings.npy", "selection_pool_ids.npy")
 
@@ -33,7 +33,7 @@ def snapshot_exists(output_dir: str | Path) -> bool:
 
 
 def generate_snapshot(output_dir: str | Path, data_root: str, embedding: str = DEFAULT_EMBEDDING,
-                      embedding_model: str = DEFAULT_EMBEDDING_MODEL, auto_thresholds: bool = True,
+                      embedding_model: str = DEFAULT_EMBEDDING_MODEL, auto_thresholds: bool = False,
                       cfg_override=None):
     """Generate the explorer snapshot in ``output_dir`` from ``data_root``.
 
@@ -254,7 +254,7 @@ def constrained_candidates(dist_center, labels, cluster: int, x: int):
     return candidates
 
 
-def run_kmeans_xnn(embeddings, quality, k: int, init: str = "farthest", x: int = DEFAULT_XNN_K):
+def run_kmeans_xnn(embeddings, quality, k: int, init: str = "best_quality", x: int = DEFAULT_XNN_K):
     """Run k-means with ``k = n`` and resolve each cluster's xNN pick.
 
     Returns a dict with seeds, labels, cluster centers and, for every cluster,

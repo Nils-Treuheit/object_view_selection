@@ -2,9 +2,9 @@
 
 ## Overview
 
-**`config.py` is the ground truth for every pre-filter threshold.** The auto-tuner only adjusts those config values on top when it is active (the default, or `--auto-thresholds`): it computes percentiles from the dataset itself, then clamps the result within sensible safety bounds so even a garbage dataset enforces a minimum quality bar.
+**`config.py` is the ground truth for every pre-filter threshold.** The auto-tuner only adjusts those config values on top when it is active (opt-in via `--auto-thresholds`): it computes percentiles from the dataset itself, then clamps the result within sensible safety bounds so even a garbage dataset enforces a minimum quality bar.
 
-Set `auto_thresholds: false` in `config.py` or pass `--no-auto-thresholds` to skip the auto-tuner entirely — then the config values are used **exactly as written**.
+By default (`auto_thresholds: false` in `config.py`) the auto-tuner is **off** and the config values are used **exactly as written** — the static config thresholds are the pipeline default, matching the "config is ground truth" rule.
 
 ---
 
@@ -144,11 +144,14 @@ moves rejected observations out of `accepted` with the annotated reason).
 
 ### Per-run (CLI)
 ```bash
-# Disable auto-tuning entirely, use static config defaults
-python run.py --data_root ... --no-auto-thresholds
+# Default: auto-tuning off, static config thresholds used as-is
+python run.py --data_root ...
+
+# Opt into the data-driven auto-tuner
+python run.py --data_root ... --auto-thresholds
 
 # Run ONLY the named pre-filters (including soft ones) in the given order
-python run.py --data_root ... --filter_order blur_laplacian,vincents_area --no-auto-thresholds
+python run.py --data_root ... --filter_order blur_laplacian,vincents_area
 
 # Or edit config.py directly
 ```
@@ -161,13 +164,13 @@ filters entirely. Omitting `--filter_order` keeps the default behavior: hard
 filters in the configured order plus both soft filters as diagnostics.
 
 All thresholds — including custom garbage floors and outlier z-cutoffs — are set
-in `config.py`, never on the command line. With `--no-auto-thresholds` the
-static config values are used as-is, so a manual pipeline is fully described by
-`--filter_order` + the config file.
+in `config.py`, never on the command line. With auto-tuning off (the default)
+the static config values are used as-is, so a manual pipeline is fully described
+by `--filter_order` + the config file.
 
 ### Permanently (config.py)
 ```python
-auto_thresholds = False
+auto_thresholds = True   # opt in globally
 filters.blur_laplacian.hard_min_variance = 5000.0
 filters.blur_laplacian.outlier_z = 3.5
 ```
