@@ -508,3 +508,26 @@ def test_build_soft_filters_propagates_knobs():
     assert soft_filters["vincents_area"].outlier_z == 3.0
     assert soft_filters["vincents_area"].hard_min is None
     assert soft_filters["vincents_motion_blur"].outlier_z == 2.0
+
+
+def test_filter_order_gates_soft_filters():
+    """An explicit --filter_order must gate the soft pre-filters too."""
+    from run import build_soft_filters
+    from config import PipelineConfig
+
+    cfg = PipelineConfig(auto_thresholds=False)
+    assert set(build_soft_filters(cfg)) == {"vincents_area", "vincents_motion_blur"}, \
+        "default order keeps both soft filters as diagnostics"
+
+    cfg.filters.filter_order = ["blur_laplacian"]
+    cfg.filters.explicit_filter_order = True
+    assert build_soft_filters(cfg) == {}, \
+        "explicit order excluding soft filters must drop them"
+
+    cfg.filters.filter_order = ["vincents_area"]
+    assert list(build_soft_filters(cfg)) == ["vincents_area"], \
+        "explicit order keeps only the named soft filter"
+
+    cfg.filters.explicit_filter_order = False
+    assert set(build_soft_filters(cfg)) == {"vincents_area", "vincents_motion_blur"}, \
+        "without explicit order the soft filters run again"

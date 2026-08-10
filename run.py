@@ -115,6 +115,11 @@ def build_filters(cfg: PipelineConfig, tuned=None):
     for name in cfg.filters.filter_order:
         if name in available:
             filters.append(available[name])
+        elif name in ("vincents_area", "vincents_motion_blur"):
+            continue  # soft pre-filters; built by build_soft_filters
+        else:
+            print(f"[run.py] Warning: unknown pre-filter '{name}' in filter_order; "
+                  "skipped.")
     return FilterPipeline(filters)
 
 
@@ -130,7 +135,7 @@ def build_soft_filters(cfg: PipelineConfig):
     outlier via the shared ``ScoreFilter`` base), so they can act as working
     pre-filters.
     """
-    return {
+    soft_filters = {
         "vincents_area": VincentsAreaFilter(
             softness=cfg.filters.vincents_area.softness,
             hard_min_area_fraction=cfg.filters.vincents_area.hard_min_area_fraction,
@@ -145,6 +150,10 @@ def build_soft_filters(cfg: PipelineConfig):
             enabled=cfg.filters.vincents_motion_blur.enabled,
         ),
     }
+    if cfg.filters.explicit_filter_order:
+        order = set(cfg.filters.filter_order)
+        soft_filters = {name: f for name, f in soft_filters.items() if name in order}
+    return soft_filters
 
 
 def apply_soft_filters(soft_filters, accepted, rejected=None):
@@ -951,4 +960,5 @@ if __name__ == "__main__":
         order = [name.strip() for name in args.filter_order.split(",") if name.strip()]
         if order:
             cfg.filters.filter_order = order
+            cfg.filters.explicit_filter_order = True
     run_pipeline(cfg)

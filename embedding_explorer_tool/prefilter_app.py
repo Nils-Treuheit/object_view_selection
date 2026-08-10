@@ -23,6 +23,7 @@ everything shown here is exactly what ``run.py`` would do.
 
 import argparse
 import json
+import sys
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -163,17 +164,18 @@ def build_report_text(data_root, accepted, rejected, cfg, garbage=None, outlier=
 def run_prefilter(data_root, garbage=None, outlier=None):
     """Build the dataset + pipeline, run the pre-filter and return a report.
 
-    Returns ``(text, accepted_ids, rejected_ids, reasons)``.  The dataset is
-    freshly loaded here so repeated runs stay independent of any cached
-    observation state.
+    Returns ``(text, accepted_ids, rejected_ids, reasons)``.
     """
+    dataset = Dataset(data_root)
+    dataset.load_images()
+    return _run_prefilter(data_root, dataset.observations, garbage, outlier)
+
+
+def _run_prefilter(data_root, observations, garbage=None, outlier=None):
+    """Run the pre-filter pipeline over a prepared observation list."""
     from run import apply_soft_filters, build_filters, build_soft_filters
 
     cfg = apply_knobs(PipelineConfig(data_root=data_root), garbage, outlier)
-
-    dataset = Dataset(data_root)
-    dataset.load_images()
-    observations = dataset.observations
 
     filter_pipeline = build_filters(cfg)
     soft_filters = build_soft_filters(cfg)
@@ -211,11 +213,15 @@ def auto_knobs(data_root):
     Tenengrad floors map onto the modern blur garbage knobs; every other
     knob keeps its config default (the tuner emits no ceiling / z-cutoffs).
     """
-    from utils.threshold_tuner import tune_thresholds
-
     dataset = Dataset(data_root)
     dataset.load_images()
-    tuned = tune_thresholds(dataset.observations)
+    return _auto_knobs(dataset.observations)
+
+
+def _auto_knobs(observations):
+    from utils.threshold_tuner import tune_thresholds
+
+    tuned = tune_thresholds(observations)
 
     garbage = {
         "blur_laplacian.hard_min_variance": tuned["laplacian_threshold"],
@@ -258,20 +264,38 @@ def run_embedding(data_root, output_dir, garbage=None, outlier=None):
 # HTTP layer
 # --------------------------------------------------------------------------- #
 
+class QuietThreadingHTTPServer(ThreadingHTTPServer):
+    """Threading server that stays quiet about dropped client connections."""
+
+    def handle_error(self, request, client_address):
+        exc_type, exc, _tb = sys.exc_info()
+        if isinstance(exc, (BrokenPipeError, ConnectionResetError)):
+            return
+        super().handle_error(request, client_address)
+
+
 class PrefilterApp:
     def __init__(self, data_root=DEFAULT_DATA_ROOT, output_dir=DEFAULT_OUTPUT_DIR):
         self.data_root = data_root
         self.output_dir = output_dir
         self.lock = threading.Lock()
         self.cfg = PipelineConfig(data_root=data_root)
-        self._loaded_observations = None
+        self.dataset = Dataset(data_root)
+        self.dataset.load_images()
 
     def observation_count(self):
-        if self._loaded_observations is None:
-            dataset = Dataset(self.data_root)
-            dataset.load_images()
-            self._loaded_observations = len(dataset.observations)
-        return self._loaded_observations
+        return len(self.dataset.observations)
+
+    def run(self, garbage=None, outlier=None):
+        return _run_prefilter(self.data_root, self.dataset.observations,
+                              garbage, outlier)
+
+    def run_auto(self):
+        garbage, outlier = _auto_knobs(self.dataset.observations)
+        text, accepted, rejected, reasons = \
+            _run_prefilter(self.data_root, self.dataset.observations,
+                           garbage, outlier)
+        return text, accepted, rejected, reasons, garbage, outlier
 
 
 def make_handler(app: PrefilterApp):
@@ -285,13 +309,19 @@ def make_handler(app: PrefilterApp):
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
-            self.wfile.write(body)
+            try:
+                self.wfile.write(body)
+            except (BrokenPipeError, ConnectionResetError):
+                pass
 
         def _read_body(self):
-            length = int(self.headers.get("Content-Length", 0))
-            if length == 0:
+            try:
+                length = int(self.headers.get("Content-Length", 0))
+                if length == 0:
+                    return {}
+                return json.loads(self.rfile.read(length).decode())
+            except (BrokenPipeError, ConnectionResetError, ValueError):
                 return {}
-            return json.loads(self.rfile.read(length).decode())
 
         def do_GET(self):
             path = self.path.split("?", 1)[0]
@@ -302,7 +332,10 @@ def make_handler(app: PrefilterApp):
                 self.send_header("Content-Type", "text/html; charset=utf-8")
                 self.send_header("Content-Length", str(len(body)))
                 self.end_headers()
-                self.wfile.write(body)
+                try:
+                    self.wfile.write(body)
+                except (BrokenPipeError, ConnectionResetError):
+                    pass
                 return
             if path == "/api/config":
                 self._send_json({
@@ -332,7 +365,7 @@ def make_handler(app: PrefilterApp):
                 payload = self._read_body()
                 with app.lock:
                     text, accepted_ids, rejected_ids, reasons = \
-                        run_prefilter(app.data_root, payload.get("garbage"), payload.get("outlier"))
+                        app.run(payload.get("garbage"), payload.get("outlier"))
                 self._send_json({
                     "text": text,
                     "accepted": len(accepted_ids),
@@ -343,7 +376,7 @@ def make_handler(app: PrefilterApp):
             if path == "/api/run_auto":
                 with app.lock:
                     text, accepted_ids, rejected_ids, reasons, garbage, outlier = \
-                        run_prefilter_auto(app.data_root)
+                        app.run_auto()
                 self._send_json({
                     "text": text,
                     "accepted": len(accepted_ids),
@@ -377,7 +410,7 @@ def main():
 
     app = PrefilterApp(data_root=args.data_root, output_dir=args.output_dir)
     handler = make_handler(app)
-    server = ThreadingHTTPServer(("0.0.0.0", args.port), handler)
+    server = QuietThreadingHTTPServer(("0.0.0.0", args.port), handler)
     print(f"Pre-filter tuner on http://localhost:{args.port}/")
     print(f"  data_root: {app.data_root}")
     print(f"  snapshot output (embedding explorer): {app.output_dir}")

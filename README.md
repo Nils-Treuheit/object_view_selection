@@ -56,8 +56,8 @@ bottle/
 | `--kmeans_init` | `farthest` | `farthest` or `best_quality` (top_kmeans_xnn) |
 | `--kmeans_xnn_k` | `3` | `3`, `5`, or `10` (top_kmeans_xnn) |
 | `--use_shape_descriptors` | off | CPU shape descriptors (`hu`, `zernike`, `fourier`, `shape_context`) |
-| `--filter_order` | config default | Comma-separated pre-filter order; legacy filters `border,area,occlusion,confidence,completeness` for custom orders only |
-| `--no-auto-thresholds` | off | Use static config thresholds |
+| `--filter_order` | config default | Comma-separated pre-filter order; runs ONLY the named pre-filters (including soft `vincents_area`/`vincents_motion_blur`); legacy `border,area,occlusion,confidence,completeness` for custom orders only |
+| `--no-auto-thresholds` | off | Use static config thresholds (set in `config.py`) |
 | `--plot` / `--debug` | off | Generate diagnostic plots / verbose per-step stats |
 | `--only_pre_filter` | off | Stop after pre-filtering (dump accepted/rejected samples + `rejected.json`) |
 

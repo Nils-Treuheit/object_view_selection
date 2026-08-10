@@ -142,6 +142,10 @@ class FilterConfig:
         "vincent_empty_mask", "vincent_border_pixel",
         "blur_laplacian", "blur_tenengrad", "vincents_artefacts"
     ])
+    # True when ``--filter_order`` was passed explicitly: only the named
+    # pre-filters execute — including the soft filters (``vincents_area``,
+    # ``vincents_motion_blur``), which otherwise always run as diagnostics.
+    explicit_filter_order: bool = False
 
 
 @dataclass

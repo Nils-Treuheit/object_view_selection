@@ -12,6 +12,7 @@ Run from the repository root with::
 
 import argparse
 import json
+import sys
 import threading
 import urllib.parse
 import webbrowser
@@ -221,15 +222,28 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         if isinstance(body, str):
             body = body.encode("utf-8")
-        self.wfile.write(body)
+        try:
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
 
     def log_message(self, *args):
         pass
 
 
+class QuietThreadingHTTPServer(ThreadingHTTPServer):
+    """Threading server that stays quiet about dropped client connections."""
+
+    def handle_error(self, request, client_address):
+        exc_type, exc, _tb = sys.exc_info()
+        if isinstance(exc, (BrokenPipeError, ConnectionResetError)):
+            return
+        super().handle_error(request, client_address)
+
+
 def run_server(state, port, open_browser=True):
     Handler.state = state
-    server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
+    server = QuietThreadingHTTPServer(("127.0.0.1", port), Handler)
     url = f"http://127.0.0.1:{port}/"
     print(f"Embedding Explorer: {url}")
     print(f"  snapshot : {state.output_dir}")

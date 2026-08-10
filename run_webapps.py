@@ -45,7 +45,7 @@ def _ready(port, path, timeout=10.0):
     deadline = time.time() + timeout
     while time.time() < deadline:
         try:
-            with urllib.request.urlopen(url, timeout=1.0) as resp:
+            with urllib.request.urlopen(url, timeout=3.0) as resp:
                 return resp.status == 200
         except Exception:
             time.sleep(0.5)
