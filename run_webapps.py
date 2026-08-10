@@ -6,8 +6,8 @@ Usage:
 The wrapper first ensures a snapshot exists in ``--output`` by running the
 pre-filter + quality-scoring + embedding stages (the same "init" the
 explorer would otherwise do on startup). Only when that is finished are the
-two servers started and the URLs printed, so both pages open with data
-ready:
+two servers started, both pages opened in the browser, and the URLs printed,
+so both pages open with data ready:
 
 * tuner (port 8520) — tune the pre-filter thresholds (default filter set =
   the default run.py pipeline; `--filter-order` swaps in any other order),
@@ -26,6 +26,7 @@ import sys
 import threading
 import time
 import urllib.request
+import webbrowser
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
@@ -93,7 +94,7 @@ def main():
     parser.add_argument("--explorer-port", type=int, default=EXPLORER_PORT)
     parser.add_argument("--tuner-port", type=int, default=TUNER_PORT)
     parser.add_argument("--no-browser", action="store_true",
-                        help="do not auto-open the explorer in a browser")
+                        help="do not auto-open the two pages in a browser")
     parser.add_argument("--regen", action="store_true",
                         help="re-run the init pre-filter + embedding even if a "
                              "snapshot already exists")
@@ -121,8 +122,7 @@ def main():
     commands = [
         ("explorer", [sys.executable, "-m", "embedding_explorer_tool.webapp",
                       "--data_root", data_root, "--output_dir", output_dir,
-                      "--port", str(args.explorer_port)]
-         + (["--no-browser"] if args.no_browser else [])),
+                      "--port", str(args.explorer_port), "--no-browser"]),
         ("tuner", [sys.executable, "-m", "embedding_explorer_tool.prefilter_app",
                    "--data_root", data_root, "--output_dir", output_dir,
                    "--port", str(args.tuner_port)]
@@ -150,6 +150,10 @@ def main():
         for _name, proc in procs:
             proc.wait()
         sys.exit(1)
+
+    if not args.no_browser:
+        webbrowser.open(f"http://127.0.0.1:{args.tuner_port}/")
+        webbrowser.open(f"http://127.0.0.1:{args.explorer_port}/")
 
     print("\n=== Webapps ready ===")
     print(f"  pre-filter tuner  : http://127.0.0.1:{args.tuner_port}/")

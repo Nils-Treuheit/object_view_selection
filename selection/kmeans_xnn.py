@@ -158,6 +158,7 @@ class TopKMeansXNN(SubsetSelector):
         embeddings: np.ndarray,
         quality_scores: np.ndarray | None = None,
         n: int = 10,
+        silhouette_scores: np.ndarray | None = None,
     ) -> np.ndarray:
         embeddings = np.asarray(embeddings, dtype=float)
         n = min(n, len(embeddings))

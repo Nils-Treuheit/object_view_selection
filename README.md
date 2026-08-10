@@ -53,6 +53,9 @@ bottle/
 | `--embedding_model` | `facebook/dinov3-vitb16-pretrain-lvd1689m` | Model name/path; type inferred when `--embedding=auto` |
 | `--selector` | `quality_diversity` | `fps`, `quality_diversity`, `facility_location`, `dpp`, `next_best_view`, `top_kmeans_xnn` |
 | `--selector_alpha` / `--selector_beta` | `0.60` / `0.40` | Quality / diversity weights (GQD) |
+| `--selector_diversity_mode` | `min` | `min`, `max`, `prototype` — how GQD measures distance to the selected set |
+| `--selector_use_descriptors` | off | Blend a shape-descriptor divergence (default silhouette) into the GQD diversity term |
+| `--selector_descriptor` / `--selector_descriptor_weight` | `silhouette` / `0.5` | Descriptor family and its share of the GQD diversity term |
 | `--kmeans_init` | `best_quality` | `farthest` or `best_quality` (top_kmeans_xnn) |
 | `--kmeans_k` | `--num_views` | k-means clusters; smaller explicit k seeds kMeans-xNN and fills the rest by cluster avg. quality |
 | `--kmeans_xnn_k` | `10` | `3`, `5`, or `10` (top_kmeans_xnn) |
@@ -68,6 +71,8 @@ Examples:
 python run.py --data_root /path/to/bottle --embedding dinov2 --embedding_model dinov2_vitb14_reg
 python run.py --data_root /path/to/bottle --selector dpp --num_views 10
 python run.py --data_root /path/to/bottle --use_shape_descriptors --shape_descriptor zernike
+python run.py --data_root /path/to/bottle --selector quality_diversity --selector_diversity_mode prototype
+python run.py --data_root /path/to/bottle --selector quality_diversity --selector_use_descriptors
 python run.py --data_root /path/to/bottle --plot --debug
 ```
 

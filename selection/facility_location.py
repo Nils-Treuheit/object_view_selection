@@ -11,6 +11,7 @@ class FacilityLocation(SubsetSelector):
         embeddings: np.ndarray,
         quality_scores: np.ndarray | None = None,
         n: int = 10,
+        silhouette_scores: np.ndarray | None = None,
     ) -> np.ndarray:
         n = min(n, len(embeddings))
         if n == 0:

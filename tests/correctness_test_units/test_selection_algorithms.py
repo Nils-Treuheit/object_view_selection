@@ -158,6 +158,141 @@ def test_gqd_diversity_uses_min_distance():
     check(third == expected_third, f"GQD third: got {third}, expected {expected_third} (farthest from both)")
 
 
+def test_gqd_diversity_mode_max():
+    """diversity_mode='max' uses the farthest selected-sample distance."""
+    from selection.greedy_quality_diversity import GreedyQualityDiversity
+
+    emb = _onehot(5)
+    quality = np.array([0.1, 0.9, 0.3, 0.7, 0.2], dtype=np.float32)
+    dist = pairwise_distances(emb, metric="cosine")
+    alpha, beta = 0.0, 1.0
+
+    idx = GreedyQualityDiversity(alpha=alpha, beta=beta, diversity_mode="max").select(emb, quality, 3)
+    first = int(idx[0])
+    check(first == 1, f"GQD(max) first pick: got {first}, expected 1 (argmax quality)")
+
+    second = int(idx[1])
+    sel = [first]
+    expected_second = int(dist[:, sel].max(axis=1).argmax())
+    check(second == expected_second, f"GQD(max) second: got {second}, expected {expected_second} (max distance)")
+
+
+def test_gqd_diversity_mode_prototype():
+    """diversity_mode='prototype' uses distance to the selected set's average sample."""
+    from selection.greedy_quality_diversity import GreedyQualityDiversity
+
+    emb = np.array([
+        [1, 0, 0],
+        [-1, 0, 0],
+        [0, 1, 0],
+        [0, -1, 0],
+        [0.1, 0, 0.995],
+    ], dtype=np.float32)
+    quality = np.array([0.1, 0.1, 0.1, 0.1, 0.9], dtype=np.float32)
+    alpha, beta = 0.01, 0.99
+
+    idx = GreedyQualityDiversity(alpha=alpha, beta=beta, diversity_mode="prototype").select(emb, quality, 3)
+    first = int(idx[0])
+    check(first == 4, f"GQD(prototype) first pick: got {first}, expected 4 (argmax quality)")
+
+    # prototype = mean of selected embeddings; distance = cosine to that mean.
+    proto = emb[[first]].mean(axis=0)
+    d = pairwise_distances(emb, proto.reshape(1, -1), metric="cosine").ravel()
+    d[first] = -1
+    expected_second = int(d.argmax())
+    second = int(idx[1])
+    check(second == expected_second, f"GQD(prototype) second: got {second}, expected {expected_second}")
+
+
+def test_gqd_uses_silhouette_descriptors():
+    """With use_descriptors, the diversity term blends embedding cosine + descriptor divergence."""
+    from selection.greedy_quality_diversity import GreedyQualityDiversity
+
+    emb = _onehot(4)
+    quality = np.array([0.1, 0.9, 0.3, 0.5], dtype=np.float32)
+    # silhouettes that disagree with the embedding space: sample 0 is nearest
+    # to sample 1 in silhouette space (but orthogonal to it in embeddings), so
+    # descriptor-driven diversity picks a different second view than
+    # embedding-driven diversity (which would pick 0 first).
+    silhouettes = np.array([
+        [0.99, 0.01, 0, 0],
+        [1.0, 0.0, 0, 0],
+        [0.0, 0.0, 1, 0],
+        [0.0, 0.0, 0, 1],
+    ], dtype=np.float32)
+    alpha, beta, dw = 0.0, 1.0, 1.0
+
+    idx = GreedyQualityDiversity(alpha=alpha, beta=beta, use_descriptors=True,
+                                 descriptor_weight=dw).select(emb, quality, 3,
+                                                              silhouette_scores=silhouettes)
+    first = int(idx[0])
+    check(first == 1, f"GQD(desc) first pick: got {first}, expected 1 (argmax quality)")
+
+    sil_dist = pairwise_distances(silhouettes, metric="cosine")
+    selected = [first]
+    expected_second = int(sil_dist[:, selected].min(axis=1).argmax())
+    second = int(idx[1])
+    check(second == expected_second, f"GQD(desc) second: got {second}, expected {expected_second} (silhouette-driven)")
+
+    # With dw=1 the embedding space is ignored entirely: the embedding-based
+    # pick would be sample 0 (farthest from sample 1 in embedding space), but
+    # the silhouette space treats it as the nearest and picks sample 2 instead.
+    check(second == 2, f"GQD(desc) with full descriptor weight ignores embeddings (picked {second})")
+
+
+def test_gqd_descriptor_weight_mixes_spaces():
+    """A partial descriptor weight blends embedding + descriptor diversity."""
+    from selection.greedy_quality_diversity import GreedyQualityDiversity
+
+    emb = _onehot(4)
+    quality = np.array([0.1, 0.9, 0.3, 0.5], dtype=np.float32)
+    silhouettes = np.array([
+        [1, 0, 0],
+        [0, 1, 0],
+        [0, 0, 1],
+        [0, 0.99, 0.01],
+    ], dtype=np.float32)
+    alpha, beta, dw = 0.0, 1.0, 0.5
+
+    idx = GreedyQualityDiversity(alpha=alpha, beta=beta, use_descriptors=True,
+                                 descriptor_weight=dw).select(emb, quality, 3,
+                                                              silhouette_scores=silhouettes)
+    first = int(idx[0])
+    emb_dist = pairwise_distances(emb, metric="cosine")
+    sil_dist = pairwise_distances(silhouettes, metric="cosine")
+
+    selected = [first]
+    combined = 0.5 * emb_dist[:, selected].min(axis=1) + 0.5 * sil_dist[:, selected].min(axis=1)
+    combined[first] = -1
+    expected_second = int(combined.argmax())
+    second = int(idx[1])
+    check(second == expected_second,
+          f"GQD(mix) second: got {second}, expected {expected_second} (blended diversity)")
+
+
+def test_gqd_without_descriptors_ignores_silhouette_arg():
+    """use_descriptors=False ignores the silhouette_scores argument (pure embedding GQD)."""
+    from selection.greedy_quality_diversity import GreedyQualityDiversity
+
+    emb = _onehot(4)
+    quality = np.array([0.1, 0.9, 0.3, 0.5], dtype=np.float32)
+    silhouettes = np.array([[1, 0, 0], [0, 1, 0], [0, 0, 1], [0, 0.99, 0.01]], dtype=np.float32)
+
+    idx_with = GreedyQualityDiversity(alpha=0.0, beta=1.0).select(emb, quality, 4, silhouette_scores=silhouettes)
+    idx_plain = GreedyQualityDiversity(alpha=0.0, beta=1.0).select(emb, quality, 4)
+    check(list(idx_with) == list(idx_plain), "silhouette_scores is ignored when use_descriptors=False")
+
+
+def test_gqd_raises_on_bad_diversity_mode():
+    from selection.greedy_quality_diversity import GreedyQualityDiversity
+    try:
+        GreedyQualityDiversity(diversity_mode="median")
+    except ValueError:
+        check(True, "invalid diversity_mode raises ValueError")
+        return
+    check(False, "invalid diversity_mode should raise ValueError")
+
+
 # ---------------------------------------------------------------------------
 # Facility Location
 # ---------------------------------------------------------------------------

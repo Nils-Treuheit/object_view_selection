@@ -75,26 +75,42 @@ while len(idx) < n:
 
 Score each candidate as a weighted combination of its own **quality** and its **diversity contribution** — defined as the minimum cosine distance to any already-selected point. This is a standard maximum-marginal-relevance (MMR) objective.
 
+The diversity term can optionally **blend a silhouette-descriptor divergence** with the embedding cosine distance, so each new pick changes the distances that drive the next pick.
+
 ### Algorithm
 
 ```
 1. Start with the single highest-quality observation.
 2. Repeat until n are selected:
    a. For every remaining point i:
-      score[i] = α · quality[i]  +  β · min(cosine_dist(i, selected))
+      score[i] = α · quality[i]  +  β · diversity[i]
+      diversity[i] = (1 - w) · agg(cosine_dist(i, selected))
+                   + w · agg(descriptor_divergence(i, selected))
    b. Pick the point with the highest score.
 ```
+
+`agg` depends on `diversity_mode`:
+- `min` (default) — distance to the **nearest** selected sample (classic GQD);
+- `max` — distance to the **farthest** selected sample;
+- `prototype` — distance to the **average sample** of the selected set.
+
+When `use_descriptors` is off, `diversity[i]` is the pure embedding cosine distance.
 
 ### Pseudocode
 
 ```python
-dist = pairwise_distances(embeddings, metric="cosine")
+emb_dist = pairwise_distances(embeddings, metric="cosine")
+if use_descriptors and silhouette_scores is not None:
+    sil_dist = pairwise_distances(silhouette_scores, metric="cosine")
 idx = [quality_scores.argmax()]             # start with best quality
 
 while len(idx) < n:
     best_score = -∞
     for i not in idx:
-        diversity = dist[i, idx].min()       # min dist to ALL selected
+        diversity = agg(emb_dist, idx, i)   # min/max/prototype distance
+        if sil_dist is not None:
+            diversity = (1 - descriptor_weight) * diversity \
+                      + descriptor_weight * agg(sil_dist, idx, i)
         score = α · quality[i]  +  β · diversity
         if score > best_score: ...
     idx.append(best_i)
@@ -106,8 +122,11 @@ while len(idx) < n:
 |-----------|---------|--------|
 | `alpha` | 0.5 | Weight on quality. Higher = prefer high-score views |
 | `beta` | 0.5 | Weight on diversity. Higher = spread views apart |
+| `diversity_mode` | `"min"` | How distance to the selected set is aggregated: `"min"`, `"max"`, `"prototype"` |
+| `use_descriptors` | `False` | Blend a descriptor divergence into the diversity term |
+| `descriptor_weight` | 0.5 | Share of the descriptor divergence (rest is embedding cosine) |
 
-`alpha` and `beta` need not sum to 1 (the scores are compared, not normalised). The selector's own defaults are balanced (0.5 / 0.5); the pipeline overrides them with the config/CLI values `selector_alpha` (default 0.60) and `selector_beta` (default 0.40).
+`alpha` and `beta` need not sum to 1 (the scores are compared, not normalised). The selector's own defaults are balanced (0.5 / 0.5); the pipeline overrides them with the config/CLI values `selector_alpha` (default 0.60) and `selector_beta` (default 0.40), and passes `selector_diversity_mode` (default `"min"`), `selector_use_descriptors` (default off), `selector_descriptor_weight` (default 0.5) and `selector_descriptor` (default `"silhouette"`).
 
 ### Properties
 
@@ -117,13 +136,16 @@ while len(idx) < n:
 | Deterministic | Yes (quality argmax tiebreak is fully determined) |
 | Diversity | Minimum distance to the selected set — pushes into empty regions |
 | Greedy | Makes the best single-step choice at each iteration (not globally optimal) |
-| Complexity | O(n · N) distance lookups |
+| Complexity | O(n · N) distance lookups (+ O(N²) descriptor pair distances when `use_descriptors`) |
 
 ### When to Use
 
 - Default choice for most pipelines.
 - When you want a tunable balance between quality and diversity.
 - `alpha > beta` when quality is the primary concern; `beta > alpha` when coverage matters more.
+- `--selector_use_descriptors` when views should also differ *geometrically* (e.g. for
+  reconstruction/onboarding): the descriptor divergence (default silhouette) spreads picks
+  across distinct shapes/poses even when the embeddings sit close together.
 
 ---
 
@@ -352,7 +374,7 @@ The neighbourhood comes with one hard constraint: a nearest neighbour may only b
 | Algorithm | Quality-aware | Deterministic | Diversity strategy | Metric | Complexity |
 |-----------|:---:|:---:|---|:---:|:---:|
 | **FPS** | — | — | Farthest from selected set | Cosine | O(n·N) |
-| **GQD** | α · quality | ✓ | Min distance to selected set | Cosine | O(n·N) |
+| **GQD** | α · quality | ✓ | Min/max/prototype distance to selected set, optionally blended with descriptor divergence | Cosine (+descriptor) | O(n·N) |
 | **Facility Location** | — | ✓ | Coverage (max-similarity sum) | Cosine | O(n·N²) |
 | **DPP** | Quality-weighted kernel | ✓ | Determinant (anti-redundancy) | RBF(cosine) | O(n·N·k³) |
 | **NBV** | quality + 0.5 · diversity | ✓ | Mean distance to selected set | Euclidean | O(n·N) |
@@ -363,6 +385,14 @@ The neighbourhood comes with one hard constraint: a nearest neighbour may only b
 ```bash
 # Greedy Quality-Diversity (default)
 python run.py --selector quality_diversity --selector_alpha 0.60 --selector_beta 0.40
+
+# GQD diversity measured to the farthest / prototype selected sample
+python run.py --selector quality_diversity --selector_diversity_mode max
+python run.py --selector quality_diversity --selector_diversity_mode prototype
+
+# GQD with silhouette-descriptor divergence blended into the diversity term
+python run.py --selector quality_diversity --selector_use_descriptors \
+              --selector_descriptor silhouette --selector_descriptor_weight 0.5
 
 # Farthest Point Sampling
 python run.py --selector fps

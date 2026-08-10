@@ -240,6 +240,31 @@ Layout:
   shows the newly-tuned selection pool. The snapshot is always written with
   auto-threshold tuning off, using the exact config values shown in the knobs.
 
+### Running both apps together
+
+`run_webapps.py` starts the tuner and the explorer on the same snapshot. It
+first ensures the snapshot exists (pre-filter + quality + embedding init), then
+launches both servers and **auto-opens both pages** in the browser:
+
+```bash
+python run_webapps.py -i /path/to/dataset -o ./outputs_embedding_explorer
+python run_webapps.py -i /path/to/dataset -o ./outputs_embedding_explorer --regen   # force init re-run
+python run_webapps.py -i /path/to/dataset -o ./outputs_embedding_explorer --no-browser
+```
+
+| Argument | Default | Effect |
+|----------|---------|--------|
+| `-i` / `--input` | required | Dataset root with `images/` and `masks/` |
+| `-o` / `--output` | required | Shared snapshot dir (explorer reads it, tuner writes it) |
+| `--explorer-port` | `8510` | Explorer server port |
+| `--tuner-port` | `8520` | Tuner server port |
+| `--no-browser` | off | Do not auto-open the two pages |
+| `--regen` | off | Re-run the init pre-filter + embedding even if a snapshot exists |
+| `--filter-order` | run.py default set | Pre-filter order for the tuner |
+
+The wrapper waits until both servers answer, then opens the tuner page (8520)
+first and the explorer page (8510) second. Ctrl+C stops both servers.
+
 ## Module layout
 
 | File | Purpose |

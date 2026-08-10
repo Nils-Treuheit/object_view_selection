@@ -205,6 +205,14 @@ class PipelineConfig:
     selector: str = "quality_diversity"
     selector_alpha: float = 0.60
     selector_beta: float = 0.40
+    # How the GQD selector aggregates the distance from a candidate to the
+    # already-selected set: "min" (nearest sample), "max" (farthest sample),
+    # "prototype" (average sample of the set).
+    selector_diversity_mode: str = "min"
+    # Include a descriptor-based divergence score in the GQD diversity term.
+    selector_use_descriptors: bool = False
+    selector_descriptor_weight: float = 0.5
+    selector_descriptor: str = "silhouette"      # silhouette | hu | zernike | fourier | shape_context
     dpp_sigma: float = 0.5
     # Top kMeans Embedding Selection in xNN quality Neighborhood
     kmeans_init: str = "best_quality"        # "farthest" | "best_quality"

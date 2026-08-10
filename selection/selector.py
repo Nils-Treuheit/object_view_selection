@@ -11,5 +11,6 @@ class SubsetSelector(ABC):
         embeddings: np.ndarray,
         quality_scores: np.ndarray | None = None,
         n: int = 10,
+        silhouette_scores: np.ndarray | None = None,
     ) -> np.ndarray:
         pass

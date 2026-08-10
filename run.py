@@ -291,6 +291,9 @@ def extract_shape_descriptor(observation, descriptor_type: str) -> np.ndarray:
     elif descriptor_type == "shape_context":
         from descriptors.shape_context import shape_context_descriptor
         return shape_context_descriptor(mask)
+    elif descriptor_type == "silhouette":
+        from descriptors.silhouette import silhouette_descriptor
+        return silhouette_descriptor(mask)
     else:
         raise ValueError(f"Unknown shape descriptor: {descriptor_type}")
 
@@ -302,7 +305,13 @@ def build_selector(cfg: PipelineConfig):
         return FarthestPointSampling()
     elif name == "quality_diversity":
         from selection.greedy_quality_diversity import GreedyQualityDiversity
-        return GreedyQualityDiversity(alpha=cfg.selector_alpha, beta=cfg.selector_beta)
+        return GreedyQualityDiversity(
+            alpha=cfg.selector_alpha,
+            beta=cfg.selector_beta,
+            diversity_mode=cfg.selector_diversity_mode,
+            use_descriptors=cfg.selector_use_descriptors,
+            descriptor_weight=cfg.selector_descriptor_weight,
+        )
     elif name == "facility_location":
         from selection.facility_location import FacilityLocation
         return FacilityLocation()
@@ -667,10 +676,17 @@ def run_pipeline(cfg: PipelineConfig):
     embeddings = np.array([obs.embedding for obs in pool])
     pool_quality = np.array([obs.quality for obs in pool])
 
+    silhouette_scores = None
+    if cfg.selector_use_descriptors and cfg.selector == "quality_diversity":
+        silhouette_scores = np.array([
+            extract_shape_descriptor(obs, cfg.selector_descriptor) for obs in pool
+        ])
+
     selected_idx = selector.select(
         embeddings=embeddings,
         quality_scores=pool_quality,
         n=cfg.num_views,
+        silhouette_scores=silhouette_scores,
     )
 
     selected = [pool[i] for i in selected_idx]
@@ -903,6 +919,22 @@ if __name__ == "__main__":
     parser.add_argument("--selector_beta", type=float, default=None,
                         help="Diversity weight for the quality_diversity (GQD) selector "
                              "(default: config value 0.40)")
+    parser.add_argument("--selector_diversity_mode", type=str, default=None,
+                        choices=["min", "max", "prototype"],
+                        help="How the GQD selector measures distance to the selected set: "
+                             "'min' (nearest sample), 'max' (farthest sample), "
+                             "'prototype' (average sample of the set) "
+                             "(default: config value 'min')")
+    parser.add_argument("--selector_use_descriptors", action="store_true", dest="selector_use_descriptors",
+                        help="Include a descriptor-based divergence score (e.g. silhouette) "
+                             "in the GQD diversity term alongside the embedding cosine distance")
+    parser.add_argument("--selector_descriptor_weight", type=float, default=None,
+                        help="Share of the descriptor divergence in the GQD diversity term "
+                             "(default: config value 0.5)")
+    parser.add_argument("--selector_descriptor", type=str, default=None,
+                        choices=["silhouette", "hu", "zernike", "fourier", "shape_context"],
+                        help="Shape descriptor used for the GQD diversity score "
+                             "(default: config value 'silhouette')")
     parser.add_argument("--kmeans_init", type=str, default=None,
                         choices=["farthest", "best_quality"],
                         help="k-means cluster-init for the top_kmeans_xnn selector: "
@@ -961,6 +993,14 @@ if __name__ == "__main__":
         cfg.selector_alpha = args.selector_alpha
     if args.selector_beta is not None:
         cfg.selector_beta = args.selector_beta
+    if args.selector_diversity_mode is not None:
+        cfg.selector_diversity_mode = args.selector_diversity_mode
+    if args.selector_use_descriptors:
+        cfg.selector_use_descriptors = True
+    if args.selector_descriptor_weight is not None:
+        cfg.selector_descriptor_weight = args.selector_descriptor_weight
+    if args.selector_descriptor is not None:
+        cfg.selector_descriptor = args.selector_descriptor
     if args.kmeans_init is not None:
         cfg.kmeans_init = args.kmeans_init
     if args.kmeans_xnn_k is not None:
