@@ -197,4 +197,4 @@ Not thresholds but affect final ranking. Defined in `QualityWeights` — exactly
 | `vincents_artefacts` | `0.20` | Mask artifact fraction |
 | `centerness` | `0.30` | Mask centredness |
 
-`confidence` is exported for diagnostics (`min(blur, area, vincents_artefacts, centerness)`) but is not a scorer component. The Vincent soft-filter softness values (`VincentsAreaConfig.softness`, `VincentsMotionBlurConfig.softness`) control the falloff steepness in robust-MADs: smaller softness → sharper discrimination around the population typical value.
+`confidence` is exported for diagnostics (`blur · area · vincents_artefacts · centerness`) but is not a scorer component. The Vincent soft-filter softness values (`VincentsAreaConfig.softness`, `VincentsMotionBlurConfig.softness`) control the falloff steepness in robust-MADs: smaller softness → sharper discrimination around the population typical value.

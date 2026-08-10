@@ -13,8 +13,8 @@ class LaplacianBlurConfig:
     enabled: bool = True
     stroke_width: int = 9
     max_variance: float = 20000.0
-    hard_min_variance: float = 4000.0
-    outlier_z: float = 3.0
+    hard_min_variance: float = 4200.0
+    outlier_z: float = 2.0
 
 
 @dataclass
@@ -27,8 +27,8 @@ class TenengradBlurConfig:
     enabled: bool = True
     stroke_width: int = 9
     max_tenengrad: float = 150.0
-    hard_min_tenengrad: float = 33.0
-    outlier_z: float = 3.0
+    hard_min_tenengrad: float = 72.5
+    outlier_z: float = 2.0
 
 
 @dataclass
@@ -102,12 +102,12 @@ class VincentsAreaConfig:
 @dataclass
 class VincentsArtifactsConfig:
     enabled: bool = True
-    kernel_size: int = 3
+    kernel_size: int = 10
     # artifact fraction at which the filter's goodness score hits 0.0
     max_fraction: float = 0.05
     # absolute garbage ceiling and extreme-bad-outlier removal on the raw stat
     hard_max_fraction: float = 0.15
-    outlier_z: float = 3.0
+    outlier_z: float = 2.0
 
 
 @dataclass
@@ -200,15 +200,19 @@ class PipelineConfig:
 
     use_shape_descriptors: bool = False
     shape_descriptor: str = "hu"
-    auto_thresholds: bool = True
+    auto_thresholds: bool = False
 
     selector: str = "quality_diversity"
     selector_alpha: float = 0.60
     selector_beta: float = 0.40
     dpp_sigma: float = 0.5
     # Top kMeans Embedding Selection in xNN quality Neighborhood
-    kmeans_init: str = "farthest"        # "farthest" | "best_quality"
-    kmeans_xnn_k: int = 3                # xNN radius: 3 | 5 | 10
+    kmeans_init: str = "best_quality"        # "farthest" | "best_quality"
+    # k-means clusters for the top_kmeans_xnn selector; None => one cluster per
+    # requested view (k = num_views). A smaller explicit k selects k views via
+    # kMeans-xNN and fills the rest from the clusters by average quality.
+    kmeans_k: int | None = None
+    kmeans_xnn_k: int = 10                    # xNN radius: nearest neighbours around each centroid
 
     quality_weights: QualityWeights = field(default_factory=QualityWeights)
     quality_anchors: QualityAnchors = field(default_factory=QualityAnchors)

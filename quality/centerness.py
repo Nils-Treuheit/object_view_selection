@@ -2,18 +2,20 @@ import numpy as np
 
 from .base import QualityMetric
 
-# distance (px) from the frame border inside which the exponential ramp bites
-BORDER_RAMP_PX = 10.0
+# distance (px) from the frame border inside which the steep ramp bites
+BORDER_ZONE_PX = 20.0
 
 
 class CenternessQuality(QualityMetric):
-    """How centered the visible object is in the frame.
+    """How centered the visible object's center point is in the frame.
 
-    Based on the mask's bounding-box center relative to the frame center:
-    very low punishment near the center, punishment increasing toward the
-    edges, with an exponential punishment ramp within ``BORDER_RAMP_PX`` px
-    of the image border (objects grazing the frame edge are the same failure
-    mode as truncation and get crushed).
+    Uses the mask centroid (center point) relative to the frame center:
+    perfect 1.0 when the center point sits exactly at the frame center.
+    Shifting the center point away from the center costs only a light
+    (quadratic) decrease while it stays in the interior, but once the center
+    point enters the ``BORDER_ZONE_PX``-px band along any image border the
+    score drops off exponentially — objects whose center grazes the frame are
+    crushed (same failure mode as truncation).
     """
 
     name = "centerness"
@@ -29,31 +31,30 @@ class CenternessQuality(QualityMetric):
         if ys.size == 0:
             return 0.0
 
-        bbox_x = float(xs.min())
-        bbox_y = float(ys.min())
-        bbox_x1 = float(xs.max())
-        bbox_y1 = float(ys.max())
-        bbox_cx = 0.5 * (bbox_x + bbox_x1)
-        bbox_cy = 0.5 * (bbox_y + bbox_y1)
+        # object center point = mask centroid
+        cx = float(xs.mean())
+        cy = float(ys.mean())
 
-        # normalized deviation from the frame center (0 center, 1 frame edge)
+        # normalized deviation of the center point from the frame center
+        # (0 center, 1 frame edge)
         half_w = max((width - 1) / 2.0, 1e-6)
         half_h = max((height - 1) / 2.0, 1e-6)
-        dx = abs(bbox_cx - (width - 1) / 2.0) / half_w
-        dy = abs(bbox_cy - (height - 1) / 2.0) / half_h
+        dx = abs(cx - (width - 1) / 2.0) / half_w
+        dy = abs(cy - (height - 1) / 2.0) / half_h
         distance = min(np.sqrt(dx * dx + dy * dy) / np.sqrt(2.0), 1.0)
 
-        # low punishment near center, punishment increasing toward edges
-        centerness = 1.0 - distance ** 1.5
+        # light decrease in the center area: a quadratic falloff keeps the
+        # punishment flat near the center and only bites further out
+        centerness = 1.0 - distance ** 2
 
-        # exponential punishment ramp within BORDER_RAMP_PX of the frame border
+        # steep exponential ramp once the center point enters the border zone
         gap = min(
-            bbox_y,
-            height - 1 - bbox_y1,
-            bbox_x,
-            width - 1 - bbox_x1,
+            cy,
+            height - 1 - cy,
+            cx,
+            width - 1 - cx,
         )
-        if gap < BORDER_RAMP_PX:
-            centerness *= float(np.exp((gap - BORDER_RAMP_PX) * 0.5))
+        if gap < BORDER_ZONE_PX:
+            centerness *= float(np.exp((gap - BORDER_ZONE_PX) * 0.5))
 
         return float(np.clip(centerness, 0.0, 1.0))

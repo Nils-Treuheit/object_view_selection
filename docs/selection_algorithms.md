@@ -293,14 +293,16 @@ while len(idx) < n:
 
 ### Core Idea
 
-Run k-means over the embedding pool with `k = n` (one cluster per requested view), then for every cluster pick the **best-quality** pool sample from the cluster centroid's **xNN neighbourhood** instead of blindly taking the centroid itself. The neighbourhood is `{centroid} ∪ {its x nearest neighbours}` — so a slightly lower-quality-but-far-from-centroid sample can win as long as it stays inside the `xNN` radius, while far outliers are kept out.
+Run k-means over the embedding pool with `k` clusters, then for every cluster pick the **best-quality** pool sample from the cluster centroid's **xNN neighbourhood** instead of blindly taking the centroid itself. The neighbourhood is `{centroid} ∪ {its x nearest neighbours}` — so a slightly lower-quality-but-far-from-centroid sample can win as long as it stays inside the `xNN` radius, while far outliers are kept out.
+
+`k` defaults to the number of views to collect (`--num_views`). When an explicit `k` (`--kmeans_k`) is smaller than `--num_views`, the selector takes one kMeans-xNN pick per cluster (k picks) and then **fills up** to `--num_views` by drawing one sample per cluster in descending average-quality order — greedy on quality with a mild diversity bonus — cycling until the target count is reached.
 
 The neighbourhood comes with one hard constraint: a nearest neighbour may only be a candidate for a centroid if it is closer to *that* centroid than to any other centroid (i.e. it is a member of the cluster in question). Neighbours that actually belong to a neighbouring cluster are dropped; if the whole neighbourhood is dropped, the cluster's medoid (the pool sample closest to the centroid) is used as a fallback.
 
 ### Algorithm
 
 ```
-1. Choose k = n cluster centres:
+1. Choose k cluster centres (k = --num_views by default, else --kmeans_k):
    - "farthest"      farthest-point sampling over the embedding space
                      (deterministic: starts at the highest-quality sample,
                      then repeatedly the point farthest from the chosen seeds)
@@ -313,29 +315,19 @@ The neighbourhood comes with one hard constraint: a nearest neighbour may only b
       a candidate is not allowed to be closer to another centroid than to μ_c.
       Fall back to the cluster medoid when nothing survives.
    c. pick the candidate with the highest quality.
-```
-
-### Pseudocode
-
-```python
-seeds = _fps_seeds(embeddings, quality)        # or _quality_seeds(quality)
-km = KMeans(n_clusters=k, init=embeddings[seeds], n_init=1, random_state=0)
-labels, centers = km.fit_predict(embeddings), km.cluster_centers_
-
-for c in range(k):
-    dist_c = cosine_dist(embeddings, centers[c])
-    cands  = [p for p in argsort(dist_c)[:x + 1] if labels[p] == c]   # constraint
-    if not cands:
-        cands = [medoid of cluster c]
-    picks.append(cands[argmax(quality[cands])])
+4. If k < --num_views, fill up: order clusters by average quality
+   (descending) and repeatedly draw one sample per cluster — the highest
+   quality member plus a mild diversity bonus (distance to already-picked
+   samples) — cycling until --num_views is reached.
 ```
 
 ### Parameters
 
 | Parameter | Default | Effect |
 |-----------|---------|--------|
-| `kmeans_init` | `farthest` | Cluster seeding. `farthest` spreads seeds via farthest-point sampling; `best_quality` seeds at the top-quality samples |
-| `kmeans_xnn_k` | `3` | xNN radius — neighbourhood size is `{centroid} + x nearest neighbours` (values `3`, `5`, `10`) |
+| `kmeans_init` | `best_quality` | Cluster seeding. `farthest` spreads seeds via farthest-point sampling; `best_quality` seeds at the top-quality samples |
+| `kmeans_k` | `None` | k-means clusters. `None` → one cluster per requested view (`k = --num_views`). A smaller explicit `k` selects k views via kMeans-xNN and fills the rest by cluster average quality |
+| `kmeans_xnn_k` | `10` | xNN radius — neighbourhood size is `{centroid} + x nearest neighbours` (values `3`, `5`, `10`) |
 
 ### Properties
 
@@ -385,7 +377,7 @@ python run.py --selector dpp
 python run.py --selector next_best_view
 
 # Top kMeans Embedding Selection in xNN quality Neighborhood
-python run.py --selector top_kmeans_xnn                          # init=farthest, xNN k=3
-python run.py --selector top_kmeans_xnn --kmeans_init best_quality
+python run.py --selector top_kmeans_xnn                          # init=best_quality, k=num_views, xNN k=10
+python run.py --selector top_kmeans_xnn --kmeans_k 7             # 7 xNN picks + fill-up to --num_views
 python run.py --selector top_kmeans_xnn --kmeans_init farthest --kmeans_xnn_k 10
 ```

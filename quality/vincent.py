@@ -23,18 +23,32 @@ class VincentsAreaQuality(QualityMetric):
 class VincentsArtifactsQuality(QualityMetric):
     """Global mask-artifact quality from the raw artifact fraction.
 
-    Artifact fraction = (open(mask) XOR close(mask)) / mask_pixels, computed
-    by the ``VincentsArtifactsFilter`` pre-filter. Anchored at a fixed global
-    max fraction; a mask whose artifact fraction reaches the anchor scores 0.
+    Artifact fraction = (open(mask) XOR close(mask)) / mask_pixels. Uses
+    ``metrics.vincent_artifact_fraction`` when the ``VincentsArtifactsFilter``
+    pre-filter already computed it, otherwise computes it directly from the
+    mask so the score is self-contained. Anchored at a fixed global max
+    fraction; a mask whose artifact fraction reaches the anchor scores 0.
     """
 
     name = "vincents_artefacts"
 
-    def __init__(self, max_fraction: float = 0.05):
+    def __init__(self, max_fraction: float = 0.05, kernel_size: int = 10):
         self.max_fraction = max_fraction
+        self.kernel_size = kernel_size
 
     def compute(self, observation):
         fraction = getattr(observation.metrics, "vincent_artifact_fraction", 0.0)
+        if fraction <= 0.0:
+            if observation.mask is None:
+                return 1.0
+            from preprocessing.vincent_utils import compute_artifact_mask, mask_to_foreground
+            foreground = mask_to_foreground(observation.mask)
+            pixel_count = float(np.sum(foreground))
+            if pixel_count <= 0:
+                return 0.0
+            fraction = float(
+                np.sum(compute_artifact_mask(foreground, self.kernel_size))
+            ) / pixel_count
         return float(np.clip(1.0 - fraction / self.max_fraction, 0.0, 1.0))
 
 

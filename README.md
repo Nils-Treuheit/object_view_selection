@@ -53,8 +53,9 @@ bottle/
 | `--embedding_model` | `facebook/dinov3-vitb16-pretrain-lvd1689m` | Model name/path; type inferred when `--embedding=auto` |
 | `--selector` | `quality_diversity` | `fps`, `quality_diversity`, `facility_location`, `dpp`, `next_best_view`, `top_kmeans_xnn` |
 | `--selector_alpha` / `--selector_beta` | `0.60` / `0.40` | Quality / diversity weights (GQD) |
-| `--kmeans_init` | `farthest` | `farthest` or `best_quality` (top_kmeans_xnn) |
-| `--kmeans_xnn_k` | `3` | `3`, `5`, or `10` (top_kmeans_xnn) |
+| `--kmeans_init` | `best_quality` | `farthest` or `best_quality` (top_kmeans_xnn) |
+| `--kmeans_k` | `--num_views` | k-means clusters; smaller explicit k seeds kMeans-xNN and fills the rest by cluster avg. quality |
+| `--kmeans_xnn_k` | `10` | `3`, `5`, or `10` (top_kmeans_xnn) |
 | `--use_shape_descriptors` | off | CPU shape descriptors (`hu`, `zernike`, `fourier`, `shape_context`) |
 | `--filter_order` | config default | Comma-separated pre-filter order; runs ONLY the named pre-filters (including soft `vincents_area`/`vincents_motion_blur`); legacy `border,area,occlusion,confidence,completeness` for custom orders only |
 | `--no-auto-thresholds` | off | Use static config thresholds (set in `config.py`) |

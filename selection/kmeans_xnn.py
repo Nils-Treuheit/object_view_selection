@@ -1,10 +1,15 @@
 """
 Top kMeans Embedding Selection in xNN quality Neighborhood.
 
-Strategy: run k-means over the embedding pool with ``k = n`` (one cluster per
-requested view), then for every cluster pick the *best-quality* pool sample
-from the cluster centroid's ``xNN`` neighbourhood instead of blindly taking
-the centroid itself.
+Strategy: run k-means over the embedding pool with ``k`` clusters, then for
+every cluster pick the *best-quality* pool sample from the cluster centroid's
+``xNN`` neighbourhood instead of blindly taking the centroid itself.
+
+``k`` defaults to the number of views to select (``n``). When a smaller ``k``
+is given explicitly, the selection first takes one kMeans-xNN pick per
+cluster and then **fills up** to ``n`` views by drawing one sample per cluster
+in descending average-quality order (greedy on quality with a mild diversity
+bonus), cycling until the target count is reached.
 
 The neighbourhood of a centroid is ``{centroid} ∪ {its x nearest neighbours}``,
 with one constraint: a nearest neighbour may only be considered a candidate for
@@ -79,14 +84,73 @@ def _candidates_for_center(dist_center, labels, cluster, x):
     return candidates
 
 
+def _cluster_average_quality(quality_scores, labels, k):
+    """Cluster indices ordered by descending average quality (stable ties)."""
+    averages = np.array([
+        float(quality_scores[labels == c].mean()) for c in range(k)
+    ])
+    return list(np.argsort(-averages, kind="stable"))
+
+
+def _fill_remaining(
+    embeddings,
+    quality_scores,
+    labels,
+    used,
+    picks,
+    n,
+    cluster_order,
+    diversity_lambda: float = 0.2,
+):
+    """Draw one sample per cluster until ``n`` picks are reached.
+
+    Clusters are visited in descending average-quality order and cycled until
+    ``n`` is reached or every candidate is exhausted. Within a cluster the pick
+    is greedy on quality with a mild diversity bonus (cosine distance to the
+    nearest already-picked sample), so the fill favours the strongest clusters
+    while still spreading across them.
+    """
+    picks = list(picks)
+    while len(picks) < n:
+        progressed = False
+        for c in cluster_order:
+            members = [
+                int(p) for p in np.where(labels == c)[0]
+                if int(p) not in used and int(p) not in picks
+            ]
+            if not members:
+                continue
+            members = np.asarray(members)
+            q = quality_scores[members]
+            if picks:
+                sims = pairwise_distances(
+                    embeddings[members], embeddings[list(picks)], metric="cosine"
+                )
+                diversity = sims.min(axis=1)
+            else:
+                diversity = np.ones(len(members))
+            best = int(members[np.argmax(q + diversity_lambda * diversity)])
+            used.add(best)
+            picks.append(best)
+            progressed = True
+            break
+        if not progressed:
+            break
+    return picks
+
+
 class TopKMeansXNN(SubsetSelector):
 
-    def __init__(self, init: str = "farthest", xnn_k: int = 3):
+    def __init__(self, init: str = "best_quality", k: int | None = None,
+                 xnn_k: int = 10):
         if init not in ("farthest", "best_quality"):
             raise ValueError(f"Unknown k-means init mode: {init}")
+        if k is not None and k < 1:
+            raise ValueError(f"k must be >= 1, got {k}")
         if xnn_k < 1:
             raise ValueError(f"xnn_k must be >= 1, got {xnn_k}")
         self.init = init
+        self.k = k
         self.xnn_k = xnn_k
 
     def select(
@@ -104,7 +168,8 @@ class TopKMeansXNN(SubsetSelector):
             quality_scores = np.ones(len(embeddings))
         quality_scores = np.asarray(quality_scores, dtype=float)
 
-        k = n
+        # k defaults to the number of views to select
+        k = min(self.k if self.k is not None else n, n)
         if self.init == "best_quality":
             seeds = _quality_seeds(quality_scores, k)
         else:
@@ -118,6 +183,7 @@ class TopKMeansXNN(SubsetSelector):
 
         used = set()
         picks = []
+        # pass 1: one best-quality pick per cluster inside the xNN radius
         for c in range(k):
             candidates = _candidates_for_center(dist_centers[:, c], labels, c, self.xnn_k)
             remaining = [p for p in candidates if p not in used]
@@ -130,5 +196,12 @@ class TopKMeansXNN(SubsetSelector):
                     break
             used.add(pick)
             picks.append(pick)
+
+        # pass 2: fill up to n when an explicit smaller k was requested
+        if len(picks) < n:
+            cluster_order = _cluster_average_quality(quality_scores, labels, k)
+            picks = _fill_remaining(
+                embeddings, quality_scores, labels, used, picks, n, cluster_order
+            )
 
         return np.array(picks, dtype=int)

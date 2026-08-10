@@ -14,17 +14,17 @@ All quality scores are normalised to **[0, 1]**, where **1.0 = perfect** (ideal 
 Each is computed by a dedicated `QualityMetric` implementation in `quality/`:
 
 - **`BorderBlurQuality`** – boundary-band Laplacian variance divided by a fixed global anchor (`quality_anchors.blur_max_variance`, default 10000), clipped to 1.0. It reads the `laplacian` pre-filter stat when present; if absent (e.g. a standalone scorer), it computes the boundary-band variance directly from the image and mask (stroke width 9). The anchor is a dataset-independent constant so sharpness scores are comparable across datasets.
-- **`AreaQuality`** – Mask pixel fraction divided by a fixed `0.20` max fraction (hardcoded in `quality/area.py`, equal to the `quality_anchors.area_max_fraction` default), clipped to 1.0.
-- **`VincentsArtifactsQuality`** – `clip(1 − artifact_fraction / max_fraction, 0, 1)`, where `max_fraction` comes from `quality_anchors.artifacts_max_fraction` (default 0.05): a mask whose artifact fraction reaches the anchor scores 0.
-- **`CenternessQuality`** – how centred the mask is in the frame, computed from the mask's **bounding-box centre** vs. the frame centre, with an exponential punishment ramp inside the last `BORDER_RAMP_PX = 10` px of the frame border (objects grazing the frame edge get crushed). A centred object scores 1.0.
+- **`AreaQuality`** – Mask pixel fraction divided by a fixed `0.20` max fraction (hardcoded in `quality/area.py`, equal to the `quality_anchors.area_max_fraction` default), clipped to 1.0. Bigger masks score higher.
+- **`VincentsArtifactsQuality`** – `clip(1 − artifact_fraction / max_fraction, 0, 1)`, where `max_fraction` comes from `quality_anchors.artifacts_max_fraction` (default 0.05): a mask whose artifact fraction reaches the anchor scores 0. It reads the `vincent_artifact_fraction` pre-filter stat when present, otherwise computes it directly from the mask (morphological open XOR close over the configured kernel).
+- **`CenternessQuality`** – how centred the object's **center point** (mask centroid) is in the frame. The centroid at the exact frame centre scores the perfect 1.0. Shifting the center point inside the interior costs only a **light, quadratic decrease**; once the center point enters the **`BORDER_ZONE_PX = 20` px band** along any image border the score drops off **exponentially**, so objects whose center point grazes the frame edge get crushed.
 
 All four components are anchored in **fixed global max/min values**, independent of the dataset, so quality is comparable across datasets. The population-relative soft weights (`vincents_area`, `vincents_motion_blur`) are still computed by the soft pre-filter pass for diagnostics but are not scorer components.
 
 ## Confidence
 
-`confidence = min(blur, area, vincents_artefacts, centerness)`
+`confidence = blur · area · vincents_artefacts · centerness`
 
-Confidence is the **weakest-link** score: it reflects the worst-performing quality dimension for a given view. A view with high confidence is strong in every respect; a low confidence immediately identifies the binding constraint.
+Confidence is the **product** of all four quality scores: it drops sharply if *any* dimension is weak (a 0 in any component zeroes the confidence) while rewarding views that are strong across the board. It is the multiplicative counterpart to the additive weighted score.
 
 Confidence is computed **post-hoc** after all individual scores are known and is stored in `obs.metrics.confidence`. It is exported for diagnostics but not used by the scorer.
 
@@ -51,8 +51,10 @@ Observations below the floor are still reported as accepted (they passed pre-fil
 
 ```
 individual metrics  ──weighted sum──▶  score  (aggregate quality)
-                                       confidence  (weakest link, lower bound)
+                    ──product───────▶  confidence
 ```
 
-- **Score** answers: *"How good is this view overall?"*
-- **Confidence** answers: *"Is there any dimension that makes this view risky?"*
+- **Score** answers: *"How good is this view overall?"* (weighted arithmetic mean).
+- **Confidence** answers: *"How sure are we about this view?"* (product — any weak dimension drags it down hard).
+
+Both are written to `quality.csv` together with each of the 4 individual scores.

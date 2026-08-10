@@ -494,6 +494,57 @@ def test_top_kmeans_xnn_init_modes_produce_different_seeds():
           f"init modes should seed differently (farthest={a.tolist()}, best_quality={b.tolist()})")
 
 
+def test_top_kmeans_xnn_k_caps_clusters_and_picks():
+    """An explicit smaller k seeds kMeans-xNN; the fill reaches the target n."""
+    from selection.kmeans_xnn import TopKMeansXNN
+
+    rng = np.random.RandomState(3)
+    emb = rng.randn(20, 6).astype(np.float32)
+    q = np.linspace(0.1, 1.0, 20).astype(np.float32)
+
+    # default k=None: k equals the requested number of views -> no fill-up
+    idx = TopKMeansXNN(init="best_quality").select(emb, q, 5)
+    check(len(idx) == 5, f"default k=n picks 5, got {len(idx)}")
+    check(len(set(idx.tolist())) == len(idx), "picks are unique")
+
+    # k=3 with n=10: 3 kMeans-xNN picks + 7 filled up to the target
+    idx3 = TopKMeansXNN(init="best_quality", k=3, xnn_k=10).select(emb, q, 10)
+    check(len(idx3) == 10, f"explicit k=3 still returns n=10, got {len(idx3)}")
+    check(len(set(idx3.tolist())) == len(idx3), "filled picks are unique")
+
+    # requesting fewer than k still respects n
+    idx2 = TopKMeansXNN(init="best_quality", k=7, xnn_k=10).select(emb, q, 2)
+    check(len(idx2) == 2, f"n=2 < k=7 picks 2, got {len(idx2)}")
+
+    # defaults are best_quality init, xNN radius 10, k=None (= num_views)
+    s = TopKMeansXNN()
+    check(s.init == "best_quality", f"default init best_quality, got {s.init}")
+    check(s.xnn_k == 10, f"default xnn_k 10, got {s.xnn_k}")
+    check(s.k is None, f"default k None (num_views), got {s.k}")
+
+
+def test_fill_remaining_favours_high_average_quality_cluster():
+    """Fill-up draws from the highest average-quality cluster first."""
+    from selection.kmeans_xnn import _fill_remaining, _cluster_average_quality
+
+    emb = np.array([
+        [1.0, 0.0], [0.99, 0.01], [1.01, -0.01],  # cluster A (indices 0..2)
+        [-1.0, 0.0], [-0.99, 0.01], [-1.01, -0.01],  # cluster B (indices 3..5)
+    ], dtype=np.float32)
+    q = np.array([0.99, 0.95, 0.90, 0.20, 0.15, 0.10], dtype=np.float32)
+    labels = np.array([0, 0, 0, 1, 1, 1])
+
+    order = _cluster_average_quality(q, labels, 2)
+    check(order == [0, 1], f"cluster order by avg quality desc: {order}")
+
+    used = {0}
+    picks = _fill_remaining(emb, q, labels, used, [0], 6, order)
+    check(len(picks) == 6, f"fill reaches n=6, got {len(picks)}")
+    # cluster A (indices 1, 2) is exhausted before cluster B (3, 4, 5) starts
+    check(set(picks[1:3]) == {1, 2}, f"cluster A fills first: {picks}")
+    check(set(picks[3:]) == {3, 4, 5}, f"cluster B only after A is exhausted: {picks}")
+
+
 # ---------------------------------------------------------------------------
 # Cross-selector: diversity quality monotonicity
 # ---------------------------------------------------------------------------

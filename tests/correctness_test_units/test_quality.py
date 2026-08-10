@@ -255,6 +255,38 @@ def test_centerness_reduces_quality():
     )
 
 
+def test_centerness_center_point_ramps():
+    """Centerness scores the object's center point against the frame.
+
+    Perfect 1.0 at the frame center; light (quadratic) decrease for a center
+    shift in the interior; a steep exponential crush once the center point
+    enters the 20 px border zone.
+    """
+    from quality.centerness import CenternessQuality
+
+    metric = CenternessQuality()
+
+    obs = make_observation(mask=make_circle_mask(201, 201, radius=30), obs_id=0)
+    centered = metric.compute(obs)
+    check(centered == 1.0, f"center-point at frame center scores 1.0, got {centered:.4f}")
+
+    obs_shift = make_observation(mask=make_circle_mask(200, 200, radius=20, center=(130, 100)), obs_id=1)
+    shifted = metric.compute(obs_shift)
+    check(0.90 <= shifted < 1.0,
+          f"interior center shift gets a light decrease, got {shifted:.4f}")
+
+    obs_border = make_observation(mask=make_circle_mask(200, 200, radius=4, center=(5, 100)), obs_id=2)
+    border = metric.compute(obs_border)
+    check(border < 0.05,
+          f"center point in the 20 px border zone is crushed, got {border:.4f}")
+
+    check(shifted > border, "interior shift beats border-zone placement")
+
+    obs_edge = make_observation(mask=make_circle_mask(200, 200, radius=4, center=(3, 100)), obs_id=3)
+    edge = metric.compute(obs_edge)
+    check(edge < border, f"closer to the border crushes harder ({edge:.4f} < {border:.4f})")
+
+
 def test_mask_artifacts_reduce_quality():
 
     scorer = make_scorer()
@@ -411,6 +443,11 @@ QUALITY_TESTS = [
     (
         "Centerness degradation",
         test_centerness_reduces_quality,
+    ),
+
+    (
+        "Centerness center-point ramp",
+        test_centerness_center_point_ramps,
     ),
 
     (

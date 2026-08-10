@@ -175,11 +175,11 @@ All weights are configured in `QualityWeights` and sum to 1.
 - **BorderBlurQuality:** `min(laplacian / max_variance, 1.0)` where `max_variance` is the fixed global anchor `quality_anchors.blur_max_variance` (default 10000). If the `laplacian` pre-filter stat is absent (e.g. a standalone scorer), it computes the boundary-band Laplacian variance directly from the image and mask (stroke width 9).
 - **AreaQuality:** `min(area_ratio / 0.20, 1.0)` where `area_ratio` is computed from the mask and 0.20 is `quality_anchors.area_max_fraction`. Scores increase linearly up to 20% image coverage.
 - **VincentsArtifactsQuality:** `min(1 - vincent_artifact_fraction / max_fraction, 0)` clamped, anchored by `quality_anchors.artifacts_max_fraction` (default 0.05).
-- **CenternessQuality:** how centred the mask is in the frame — computed from the mask's **bounding-box centre** vs. the frame centre, with an exponential punishment ramp inside the last 10 px of the frame border (objects grazing the frame edge are the same failure mode as truncation and get crushed). A centred object scores 1.0.
+- **CenternessQuality:** how centred the object's **center point** (mask centroid) is in the frame. The centroid at the exact frame centre scores the perfect 1.0; shifting the center point in the interior costs only a light quadratic decrease, but once the center point enters the `BORDER_ZONE_PX = 20` px band along any image border the score falls off exponentially (objects grazing the frame edge get crushed).
 
 ### Confidence (post-hoc, diagnostic)
 
-`confidence` is exported to `quality.csv` for diagnostics but is **not** a scorer component. It is computed as `min(blur, area, vincents_artefacts, centerness)` — the weakest link across all quality dimensions.
+`confidence` is exported to `quality.csv` for diagnostics but is **not** a scorer component. It is computed as `blur · area · vincents_artefacts · centerness` — the product across all quality dimensions, so any weak dimension drags it down hard.
 
 ### Quality Floor (Stage 4)
 

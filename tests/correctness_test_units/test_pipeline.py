@@ -435,7 +435,7 @@ def test_quality_scorer_new_components_end_to_end():
         assert o.metrics.blur > 0.0, "blur quality populated by scorer"
 
 
-def test_confidence_is_weakest_link():
+def test_confidence_is_score_product():
     from run import build_filters, build_quality_scorer
     from config import PipelineConfig
 
@@ -453,13 +453,19 @@ def test_confidence_is_weakest_link():
     accepted = [o for o in observations if hard.run(o)]
     for o in accepted:
         scorer.score(o)
+        o.metrics.confidence = (
+            o.metrics.blur * o.metrics.area * o.metrics.vincents_artefacts * o.metrics.centerness
+        )
 
     for o in accepted:
         m = o.metrics
-        expected = min(m.blur, m.area, m.vincents_artefacts, m.centerness)
+        expected = (m.blur * m.area * m.vincents_artefacts * m.centerness)
         assert expected > 0.0, "all component scores positive for this population"
-        assert expected <= min(m.blur, m.area, m.centerness), (
-            "artifact component tightens the weakest-link bound"
+        assert abs(m.confidence - expected) < 1e-9, (
+            "confidence is the product of all four quality scores"
+        )
+        assert m.confidence <= min(m.blur, m.area, m.centerness), (
+            "product confidence is bounded by the weakest link"
         )
 
 

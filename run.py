@@ -201,7 +201,10 @@ def build_quality_scorer(cfg: PipelineConfig, tuned=None):
         metrics.append(BorderBlurQuality(max_variance=anchors.blur_max_variance))
         weights["blur"] = cfg.quality_weights.blur
     if cfg.filters.vincents_artefacts.enabled:
-        metrics.append(VincentsArtifactsQuality(max_fraction=anchors.artifacts_max_fraction))
+        metrics.append(VincentsArtifactsQuality(
+            max_fraction=anchors.artifacts_max_fraction,
+            kernel_size=cfg.filters.vincents_artefacts.kernel_size,
+        ))
         weights["vincents_artefacts"] = cfg.quality_weights.vincents_artefacts
     metrics.append(AreaQuality())
     weights["area"] = cfg.quality_weights.area
@@ -311,7 +314,7 @@ def build_selector(cfg: PipelineConfig):
         return NextBestView()
     elif name == "top_kmeans_xnn":
         from selection.kmeans_xnn import TopKMeansXNN
-        return TopKMeansXNN(init=cfg.kmeans_init, xnn_k=cfg.kmeans_xnn_k)
+        return TopKMeansXNN(init=cfg.kmeans_init, k=cfg.kmeans_k, xnn_k=cfg.kmeans_xnn_k)
     else:
         raise ValueError(f"Unknown selector: {name}")
 
@@ -616,11 +619,11 @@ def run_pipeline(cfg: PipelineConfig):
         quality_scorer.score(obs)
 
     for obs in accepted:
-        obs.metrics.confidence = min(
-            obs.metrics.blur,
-            obs.metrics.area,
-            obs.metrics.vincents_artefacts,
-            obs.metrics.centerness,
+        obs.metrics.confidence = (
+            obs.metrics.blur
+            * obs.metrics.area
+            * obs.metrics.vincents_artefacts
+            * obs.metrics.centerness
         )
 
     if cfg.debug:
@@ -873,7 +876,7 @@ def run_pipeline(cfg: PipelineConfig):
     if cfg.save_plots:
         try:
             from utils.plotting import plot_all
-            plot_all(accepted, rejected, selected, embeddings, selected_idx, pool_quality, output_dir, single_set_plots=cfg.debug, debug=cfg.debug, pool_obs=pool, n_clusters=cfg.kmeans_xnn_k)
+            plot_all(accepted, rejected, selected, embeddings, selected_idx, pool_quality, output_dir, single_set_plots=cfg.debug, debug=cfg.debug, pool_obs=pool, n_clusters=(cfg.kmeans_k or cfg.num_views))
         except Exception as e:
             print(f"Plotting failed: {e}")
 
@@ -904,12 +907,18 @@ if __name__ == "__main__":
                         choices=["farthest", "best_quality"],
                         help="k-means cluster-init for the top_kmeans_xnn selector: "
                              "farthest-point seeds or best-quality seeds "
-                             "(default: config value 'farthest')")
+                             "(default: config value 'best_quality')")
     parser.add_argument("--kmeans_xnn_k", type=int, default=None,
                         choices=[3, 5, 10],
                         help="xNN neighbourhood radius for the top_kmeans_xnn selector: "
                              "pick the best-quality sample among the centroid plus its "
-                             "x nearest neighbours (default: config value 3)")
+                             "x nearest neighbours (default: config value 10)")
+    parser.add_argument("--kmeans_k", type=int, default=None,
+                        help="k-means clusters for the top_kmeans_xnn selector: "
+                             "selects k views via kMeans-xNN, then fills up to "
+                             "--num_views by drawing the best remaining samples per "
+                             "cluster (highest average quality first). Default: k = "
+                             "--num_views (no fill-up).")
     parser.add_argument("--filter_order", type=str, default=None,
                         help="Comma-separated pre-filter application order, e.g. "
                              "'vincent_empty_mask,vincent_border_pixel,blur_laplacian,"
@@ -922,8 +931,8 @@ if __name__ == "__main__":
                         help="Use classical shape descriptors instead of learned embeddings")
     parser.add_argument("--shape_descriptor", type=str, default="hu",
                         choices=["hu", "zernike", "fourier", "shape_context"])
-    parser.add_argument("--no-auto-thresholds", action="store_true", dest="no_auto_thresholds",
-                        help="Disable data-driven threshold tuning (use static config values)")
+    parser.add_argument("--auto-thresholds", action="store_true", dest="auto_thresholds",
+                        help="Enable data-driven threshold tuning (off by default; uses static config values)")
     parser.add_argument("--plot", action="store_true", dest="save_plots",
                         help="Generate pipeline diagnostic plots")
     parser.add_argument("--debug", action="store_true",
@@ -943,7 +952,7 @@ if __name__ == "__main__":
         selector=args.selector,
         use_shape_descriptors=args.use_shape_descriptors,
         shape_descriptor=args.shape_descriptor,
-        auto_thresholds=not args.no_auto_thresholds,
+        auto_thresholds=args.auto_thresholds,
         save_plots=args.save_plots,
         debug=args.debug,
         only_pre_filter=args.only_pre_filter,
@@ -956,6 +965,8 @@ if __name__ == "__main__":
         cfg.kmeans_init = args.kmeans_init
     if args.kmeans_xnn_k is not None:
         cfg.kmeans_xnn_k = args.kmeans_xnn_k
+    if args.kmeans_k is not None:
+        cfg.kmeans_k = args.kmeans_k
     if args.filter_order:
         order = [name.strip() for name in args.filter_order.split(",") if name.strip()]
         if order:
