@@ -965,6 +965,10 @@ if __name__ == "__main__":
                         choices=["hu", "zernike", "fourier", "shape_context"])
     parser.add_argument("--auto-thresholds", action="store_true", dest="auto_thresholds",
                         help="Enable data-driven threshold tuning (off by default; uses static config values)")
+    parser.add_argument("--quality_floor", action="store_true", dest="quality_floor_enabled",
+                        help="OPT-IN: apply the adaptive quality floor before the embedding "
+                             "selection pool (drops the worst tail of the accepted pool; "
+                             "off by default)")
     parser.add_argument("--plot", action="store_true", dest="save_plots",
                         help="Generate pipeline diagnostic plots")
     parser.add_argument("--debug", action="store_true",
@@ -1012,4 +1016,6 @@ if __name__ == "__main__":
         if order:
             cfg.filters.filter_order = order
             cfg.filters.explicit_filter_order = True
+    if args.quality_floor_enabled:
+        cfg.quality_floor.enabled = True
     run_pipeline(cfg)

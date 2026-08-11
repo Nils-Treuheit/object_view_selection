@@ -62,6 +62,7 @@ bottle/
 | `--use_shape_descriptors` | off | CPU shape descriptors (`hu`, `zernike`, `fourier`, `shape_context`) |
 | `--filter_order` | config default | Comma-separated pre-filter order; runs ONLY the named pre-filters (including soft `vincents_area`/`vincents_motion_blur`); legacy `border,area,occlusion,confidence,completeness` for custom orders only |
 | `--auto-thresholds` | off | Opt in to data-driven threshold tuning (off by default; static config thresholds used otherwise) |
+| `--quality_floor` | off | OPT-IN: apply the adaptive quality floor before embedding selection (drops the worst tail of the accepted pool; off by default) |
 | `--plot` / `--debug` | off | Generate diagnostic plots / verbose per-step stats |
 | `--only_pre_filter` | off | Stop after pre-filtering (dump accepted/rejected samples + `rejected.json`) |
 

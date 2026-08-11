@@ -181,9 +181,14 @@ All weights are configured in `QualityWeights` and sum to 1.
 
 `confidence` is exported to `quality.csv` for diagnostics but is **not** a scorer component. It is computed as `blur · area · vincents_artefacts · centerness` — the product across all quality dimensions, so any weak dimension drags it down hard.
 
-### Quality Floor (Stage 4)
+### Quality Floor (Stage 4, OPT-IN)
 
-After quality scoring, an adaptive floor (see `docs/scoring.md`) excludes the worst tail of the accepted pool from the **embedding selection pool**. Only observations with `quality >= floor` compete in the selector, so the selected set always meets a minimum quality. See `compute_quality_floor` in `run.py`.
+After quality scoring, an **optional** adaptive floor (see `docs/scoring.md`)
+excludes the worst tail of the accepted pool from the **embedding selection
+pool**. It is **disabled by default** — enable it with `--quality_floor`. When
+enabled, only observations with `quality >= floor` compete in the selector, so
+the selected set always meets a minimum quality. See `compute_quality_floor` in
+`run.py`.
 
 ### ObservationMetrics Dataclass
 

@@ -38,7 +38,12 @@ The score is stored in `obs.quality` and exported as both `quality` and `score` 
 
 ## Quality Floor (Selection Pool)
 
-Before the embedding selection, an **adaptive quality floor** is applied to the accepted pool (`quality_floor.*` in `config.py`):
+**OPT-IN, disabled by default** — the adaptive quality floor is *not* part of
+the default pipeline. Enable it explicitly with `run.py --quality_floor` (or
+`cfg.quality_floor.enabled = True`); the whole accepted pool goes to the
+embedding selection otherwise.
+
+When enabled, an **adaptive quality floor** is applied to the accepted pool before the embedding selection (`quality_floor.*` in `config.py`):
 
 - `percentile` (default 0.10): the bottom 10% of accepted observations by quality are excluded from the selection pool.
 - `absolute_min` (default 0.66): no observation below this absolute quality ever enters the selection pool.

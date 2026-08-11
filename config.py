@@ -175,13 +175,13 @@ class QualityAnchors:
 class QualityFloorConfig:
     """Adaptive minimum-quality floor applied before embedding selection.
 
-    The floor drops the worst tail of the accepted pool so that low-quality
-    samples are excluded from (or extremely unlikely to enter) the final
-    selection set, while guaranteeing enough candidates remain for a diverse
-    sample-set selection.
+    OPT-IN: disabled by default. When enabled, the floor drops the worst tail
+    of the accepted pool so that low-quality samples are excluded from (or
+    extremely unlikely to enter) the final selection set, while guaranteeing
+    enough candidates remain for a diverse sample-set selection.
     """
 
-    enabled: bool = True
+    enabled: bool = False
     percentile: float = 0.10
     minimum_pool: int = 20
     absolute_min: float = 0.66
